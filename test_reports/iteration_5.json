@@ -1,0 +1,51 @@
+{
+  "summary": "LUMIASIGN ERP — pre-deploy comprehensive frontend cross-test (40+ scenarios). All 6 demo logins verified, RBAC enforced per role, all 19 admin nav links navigate without runtime errors, AI Estimator (Gemini) returns full breakdown with profit_pct ≈ 29.97% in ~30s, Invoices new-modal exposes all 6 doc_types (Tax Invoice / Estimate / Proforma / Delivery Challan / Sale Return / Credit Note), Daybook shows 3 cash tiles (Cash/Bank/UPI) with in/out + prev/next nav, Reports surfaces GST CGST/SGST/IGST breakdown and 5+ CSV export labels, Audit Log lists 177 mutating-action rows, Notifications bell opens and shows low-stock + project alerts, logout returns to /login. 38/40 scenarios PASS, 0 critical failures.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Dashboard/CEODashboard (Recharts ResponsiveContainer)", "issue": "Console warnings on every render: 'The width(-1) and height(-1) of chart should be greater than 0'. Charts still render correctly after mount, but the parent has 0 width on first paint. Add minHeight/minWidth on the chart container or pass explicit dimensions to suppress.", "selector": "ResponsiveContainer wrappers in Dashboard.jsx and CEODashboard.jsx", "priority": "LOW"},
+      {"component": "Invoices new-invoice Select (Project/doc_type)", "issue": "React hydration error in dev console: 'In HTML, <span> cannot be a child of <option>'. Caused by emergent's instrumentation injecting <span data-ve-dynamic> inside <option> rendered from {projects.map}. Functionally harmless but pollutes console; consider wrapping option label in plain text or disabling the instrumentation marker on this element.", "selector": "Invoices.jsx ~ line 307 — projects.map(p => <option>{p.project_no}</option>)", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_coverage_executed": {
+    "login": "All 6 quickfill roles login successfully (admin, sales, production, store, accounts, installation). Wrong-password toast verified. Password show/hide toggle verified.",
+    "navigation": "Admin sees all 19 nav items. Sales sees 8 (Dashboard, Leads, Parties, Quotations, Projects, Installation, Invoices, AI Estimator). Production sees 5 (Dashboard, Projects, Production, Inventory, Costing). RBAC correctly hides CEO/Audit/Daybook/Expenses/Reports from sales; hides Leads/Quotations/CEO from production.",
+    "modules_navigated_without_error": ["Dashboard", "CEO View", "Daybook", "Leads", "Parties", "Quotations", "Projects", "Production", "Inventory", "Suppliers", "Purchases", "Installation", "Invoices", "Expenses", "Costing", "Profit Analysis", "AI Estimator", "Reports", "Audit Log"],
+    "ai_estimator": "POST /api/ai/cost-estimate → 200 in ~30s. Result panel shows Material ₹40,458 / Labour ₹10,115 / Transport ₹3,540 / Overhead ₹5,411 + Total ₹59,524 / Selling ₹85,000 / Profit ₹25,476 (29.97%) + breakdown text + assumptions. profit_pct is numeric. PASS.",
+    "invoices": "New-invoice modal opens; all 6 doc_type options present (Tax Invoice, Estimate, Proforma, Delivery Challan, Sale Return, Credit Note).",
+    "daybook": "3 cash-account tiles (CASH IN HAND ₹-600, BANK ₹34,660, UPI present) with in/out totals; PREV / NEXT navigators functional.",
+    "reports": "GST summary card present with CGST/SGST/IGST; 5+ CSV export labels visible (Revenue, GST, Inventory, Purchases, Outstanding).",
+    "audit_log": "177 rows of mutating actions rendered for admin.",
+    "notifications": "Bell opens panel; low-stock items + margin alerts populated.",
+    "parties": "Page renders Vyapar-style ledger header with NEW PARTY + ledger table headers (Receivable / Payable / Net).",
+    "logout": "Logout button returns user to /login route."
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_5.json"
+  ],
+  "action_items": [
+    "OPTIONAL (low priority): Fix Recharts width(-1) console spam by adding explicit minHeight/minWidth to ResponsiveContainer parents in Dashboard.jsx and CEODashboard.jsx.",
+    "OPTIONAL (low priority): The <span> inside <option> hydration warning on Invoices Select originates from emergent's dev-mode instrumentation (data-ve-dynamic spans). Will not appear in production build but worth noting.",
+    "NONE BLOCKING for deploy — all RBAC, navigation, AI integration, and module-level rendering verified."
+  ],
+  "critical_code_review_comments": [
+    "AppLayout.jsx NAV array is the single source of truth for role visibility — admin override happens via 'admin' being explicitly listed in each item.roles. This is consistent and easy to audit; good design.",
+    "App.js Protected wrapper has 'user.role !== \"admin\"' bypass for all role-gated routes — admin sees everything as intended. Audit Log uses roles=[] which only admin can access (because empty list never includes user.role, then admin bypass kicks in). Clever but non-obvious — add a comment.",
+    "Dashboard.jsx / CEODashboard.jsx Recharts containers should have explicit min dimensions to avoid first-paint width(-1) warnings.",
+    "Invoices.jsx <Select> options should not have arbitrary JSX children — currently emergent's instrumentation injects spans causing hydration warnings in dev builds.",
+    "Repeating from prior iteration: server.py is now >2400 lines. Split into routers/services modules before adding more endpoints."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request — last iteration 100%)", "frontend": "95% (38/40 scenarios pass; 2 minor console warnings, 0 functional failures)"},
+  "test_credentials": "Loaded from /app/memory/test_credentials.md. All 6 demo accounts authenticated successfully.",
+  "seed_data_creation": "No new test data created in this iteration — read-only verification of pre-seeded modules.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "App is deploy-ready. Backend was 72/72 in iteration_4. This iteration covered the full frontend cross-test: 6 logins, 19 admin nav items, 2 RBAC role checks (sales/production), AI Estimator end-to-end (Gemini call ~30s returning structured estimate with profit_pct), Invoices doc_type selector (all 6 options), Daybook 3-tile cashbook + prev/next, Reports GST + CSV exports, Audit Log (177 rows), Notifications panel, logout flow. Only minor console warnings remain (Recharts -1 width on first paint, and a dev-only <span>/<option> hydration warning from instrumentation). Main agent can self-verify those two cosmetic items.",
+  "rca of the issue": "No functional bugs. Two cosmetic console warnings: (1) Recharts ResponsiveContainer reports width(-1)/height(-1) on first render — happens because parent flex container measures 0 before layout; setting minHeight on chart wrapper fixes it. (2) Hydration warning for <span> inside <option> on Invoices — caused by emergent's dev instrumentation tagging each option child with a data-ve-dynamic span; production build will not emit this warning."
+}
