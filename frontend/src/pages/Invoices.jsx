@@ -118,14 +118,27 @@ export default function Invoices() {
     return { subtotal, gst, total: subtotal + gst };
   }, [form]);
 
+  const [autoSendOpen, setAutoSendOpen] = useState(false);
+  const [createdInvoice, setCreatedInvoice] = useState(null);
+  const [autoSendForm, setAutoSendForm] = useState({ phone: "", email: "" });
+
   const save = async (e) => {
     e.preventDefault();
     try {
       const payload = { ...form, gst_pct: Number(form.gst_pct), advance_received: Number(form.advance_received) || 0, items: form.items.filter((i) => i.description.trim()) };
-      if (editing) await api.put(`/invoices/${editing.id}`, payload);
-      else await api.post("/invoices", payload);
-      toast.success(editing ? "Invoice updated" : "Invoice created");
-      setOpen(false); load();
+      if (editing) {
+        await api.put(`/invoices/${editing.id}`, payload);
+        toast.success("Invoice updated");
+        setOpen(false); load();
+      } else {
+        const { data } = await api.post("/invoices", payload);
+        toast.success(`Invoice ${data.invoice_no} created`);
+        setOpen(false);
+        setCreatedInvoice(data);
+        setAutoSendForm({ phone: "", email: "" });
+        setAutoSendOpen(true);
+        load();
+      }
     } catch (err) { toast.error(err?.response?.data?.detail || "Failed"); }
   };
 
@@ -269,6 +282,84 @@ export default function Invoices() {
           <Field label="Note"><Input value={payForm.note} onChange={(e) => setPayForm({ ...payForm, note: e.target.value })} /></Field>
           <div className="flex justify-end gap-2"><Btn variant="ghost" type="button" onClick={() => setPayOpen(false)}>Cancel</Btn><Btn variant="primary" type="submit" data-testid="invoice-pay-submit">Record</Btn></div>
         </form>
+      </Modal>
+
+      {/* Auto-send modal after invoice creation */}
+      <Modal open={autoSendOpen} onClose={() => setAutoSendOpen(false)} title={createdInvoice ? `Send ${createdInvoice.invoice_no} to client?` : "Send to client"} testid="auto-send-modal">
+        {createdInvoice && (
+          <div className="space-y-4">
+            <div className="border-l-4 border-l-[#16A34A] bg-emerald-50/50 p-3">
+              <div className="text-[10px] uppercase tracking-wider font-bold text-emerald-700">Invoice ready</div>
+              <div className="text-sm text-slate-900 mt-1">
+                <b>{createdInvoice.invoice_no}</b> · {createdInvoice.client_name} · Total <b className="font-mono-num">{fmtINR(createdInvoice.total)}</b>
+              </div>
+              <div className="text-xs text-slate-600 mt-1">Outstanding due: <span className="font-mono-num font-bold">{fmtINR(createdInvoice.outstanding)}</span></div>
+            </div>
+
+            <div className="text-xs text-slate-500">
+              Send invoice notification via WhatsApp and/or Email. Deep links open WhatsApp Web / your default email app with text pre-filled — no third-party API needed.
+            </div>
+
+            <div className="grid grid-cols-1 gap-3">
+              <Field label="Client WhatsApp number (with country code, e.g. +91 98765 43210)">
+                <Input
+                  type="tel"
+                  placeholder="+91 98765 43210"
+                  value={autoSendForm.phone}
+                  onChange={(e) => setAutoSendForm({ ...autoSendForm, phone: e.target.value })}
+                  data-testid="auto-send-phone"
+                />
+              </Field>
+              <Field label="Client email">
+                <Input
+                  type="email"
+                  placeholder="client@example.com"
+                  value={autoSendForm.email}
+                  onChange={(e) => setAutoSendForm({ ...autoSendForm, email: e.target.value })}
+                  data-testid="auto-send-email"
+                />
+              </Field>
+            </div>
+
+            <div className="flex flex-wrap justify-end gap-2 pt-2">
+              <Btn variant="ghost" type="button" onClick={() => setAutoSendOpen(false)} data-testid="auto-send-skip">Skip for now</Btn>
+              <Btn
+                variant="ghost"
+                type="button"
+                data-testid="auto-send-download-pdf"
+                onClick={() => invoicePDF(createdInvoice, company)}
+              >
+                <FilePdf size={14} weight="bold" /> Download PDF
+              </Btn>
+              <Btn
+                type="button"
+                variant="ghost"
+                disabled={!autoSendForm.email.trim()}
+                onClick={async () => {
+                  const { data } = await api.get("/messaging/email-link", { params: { to: autoSendForm.email, template: "invoice_generated", invoice_id: createdInvoice.id } });
+                  window.open(data.link, "_blank");
+                  toast.success("Email draft opened");
+                }}
+                data-testid="auto-send-email-btn"
+              >
+                <EnvelopeSimple size={14} weight="bold" /> Send Email
+              </Btn>
+              <Btn
+                type="button"
+                variant="accent"
+                disabled={!autoSendForm.phone.trim()}
+                onClick={async () => {
+                  const { data } = await api.get("/messaging/whatsapp-link", { params: { phone: autoSendForm.phone, template: "invoice_generated", invoice_id: createdInvoice.id } });
+                  window.open(data.link, "_blank");
+                  toast.success("WhatsApp opened");
+                }}
+                data-testid="auto-send-wa-btn"
+              >
+                <WhatsappLogo size={14} weight="bold" /> Send via WhatsApp
+              </Btn>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );
