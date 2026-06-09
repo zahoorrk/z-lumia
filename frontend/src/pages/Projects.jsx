@@ -127,6 +127,7 @@ export default function Projects() {
                 <th className="text-left px-4 py-2 font-semibold">Client</th>
                 <th className="text-right px-4 py-2 font-semibold">Contract</th>
                 <th className="text-left px-4 py-2 font-semibold">Status</th>
+                <th className="text-left px-4 py-2 font-semibold">Flags</th>
                 {canWrite && <th className="text-right px-4 py-2 font-semibold">Actions</th>}
               </tr>
             </thead>
@@ -138,9 +139,16 @@ export default function Projects() {
                   <td className="px-4 py-3 text-slate-700">{p.client_name}</td>
                   <td className="px-4 py-3 text-right font-mono-num">{fmtINR(p.contract_value)}</td>
                   <td className="px-4 py-3"><StatusBadge status={p.status} /></td>
+                  <td className="px-4 py-3 text-[10px] uppercase tracking-wider font-bold space-x-1">
+                    {p.approved ? <span className="px-1.5 py-0.5 border border-emerald-300 bg-emerald-50 text-emerald-800">Approved</span> : <span className="px-1.5 py-0.5 border border-slate-300 bg-slate-50 text-slate-500">Not approved</span>}
+                    {p.production_completed && <span className="px-1.5 py-0.5 border border-blue-300 bg-blue-50 text-blue-800">Prod ✓</span>}
+                  </td>
                   {canWrite && (
-                    <td className="px-4 py-3 text-right">
-                      <button onClick={() => openEdit(p)} className="text-slate-500 hover:text-[#0F3BE8] p-1.5" data-testid={`project-edit-${p.id}`}><PencilSimple size={16} weight="bold" /></button>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      {!p.approved && (user?.role === "admin" || user?.role === "sales") && (
+                        <button onClick={async () => { await api.post(`/projects/${p.id}/approve`); load(); }} className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100" data-testid={`project-approve-${p.id}`}>Approve</button>
+                      )}
+                      <button onClick={() => openEdit(p)} className="text-slate-500 hover:text-[#0F3BE8] p-1.5 ml-1" data-testid={`project-edit-${p.id}`}><PencilSimple size={16} weight="bold" /></button>
                       {(user?.role === "admin" || user?.role === "sales") && (
                         <button onClick={() => remove(p.id)} className="text-slate-500 hover:text-red-600 p-1.5"><Trash size={16} weight="bold" /></button>
                       )}

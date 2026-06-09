@@ -11,6 +11,7 @@ import Projects from "@/pages/Projects";
 import Production from "@/pages/Production";
 import Inventory from "@/pages/Inventory";
 import Purchases from "@/pages/Purchases";
+import Suppliers from "@/pages/Suppliers";
 import InstallationPage from "@/pages/Installation";
 import Costing from "@/pages/Costing";
 import ProfitAnalysis from "@/pages/ProfitAnalysis";
@@ -58,6 +59,7 @@ export default function App() {
             <Route path="production" element={<Protected roles={["production"]}><Production /></Protected>} />
             <Route path="inventory" element={<Protected roles={["store", "production"]}><Inventory /></Protected>} />
             <Route path="purchases" element={<Protected roles={["store", "accounts"]}><Purchases /></Protected>} />
+            <Route path="suppliers" element={<Protected roles={["store", "accounts"]}><Suppliers /></Protected>} />
             <Route path="installation" element={<Protected roles={["installation", "sales"]}><InstallationPage /></Protected>} />
             <Route path="costing" element={<Protected roles={["accounts", "production"]}><Costing /></Protected>} />
             <Route path="profit" element={<Protected roles={["accounts"]}><ProfitAnalysis /></Protected>} />

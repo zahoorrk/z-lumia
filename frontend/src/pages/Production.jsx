@@ -1,46 +1,60 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import api from "@/lib/api";
-import { PageHeader, Btn, StatusBadge, Modal, Field, Input, Select, Textarea, Empty } from "@/components/Bits";
-import { statusLabel } from "@/lib/constants";
-import { Plus, PencilSimple, Trash } from "@phosphor-icons/react";
+import { PageHeader, Btn, Modal, Field, Empty, StatusBadge } from "@/components/Bits";
+import { PRODUCTION_STAGES } from "@/lib/constants";
+import { Plus, Factory, CheckCircle, Play, Pause, Trash } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
-const STAGES = ["queued", "cutting", "printing", "fabrication", "finishing", "qc", "done"];
+const STATUS_NEXT = { pending: "in_progress", in_progress: "completed", completed: "pending" };
+const STATUS_ICON = { pending: Pause, in_progress: Play, completed: CheckCircle };
+const STATUS_BG = {
+  pending: "bg-slate-100 text-slate-600 border-slate-300",
+  in_progress: "bg-amber-50 text-amber-800 border-amber-300",
+  completed: "bg-emerald-50 text-emerald-800 border-emerald-300",
+};
 
 export default function Production() {
   const [jobs, setJobs] = useState([]);
   const [projects, setProjects] = useState([]);
   const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ project_id: "", stage: "queued", assigned_to: "", progress: 0, notes: "" });
+  const [selectedProject, setSelectedProject] = useState("");
+  const [notes, setNotes] = useState("");
 
   const load = async () => {
-    const [a, b] = await Promise.all([api.get("/production"), api.get("/projects")]);
-    setJobs(a.data); setProjects(b.data);
+    const [j, p] = await Promise.all([api.get("/production"), api.get("/projects")]);
+    setJobs(j.data); setProjects(p.data);
   };
   useEffect(() => { load(); }, []);
 
-  const openCreate = () => { setEditing(null); setForm({ project_id: projects[0]?.id || "", stage: "queued", assigned_to: "", progress: 0, notes: "" }); setOpen(true); };
-  const openEdit = (j) => { setEditing(j); setForm({ project_id: j.project_id, stage: j.stage, assigned_to: j.assigned_to || "", progress: j.progress, notes: j.notes || "" }); setOpen(true); };
+  const approvedProjects = useMemo(() => projects.filter((p) => p.approved && !p.production_completed), [projects]);
 
-  const save = async (e) => {
+  const openCreate = () => { setSelectedProject(approvedProjects[0]?.id || ""); setNotes(""); setOpen(true); };
+
+  const createJob = async (e) => {
     e.preventDefault();
+    if (!selectedProject) { toast.error("Select an approved project"); return; }
     try {
-      const payload = { ...form, progress: Number(form.progress) || 0 };
-      if (editing) await api.put(`/production/${editing.id}`, payload);
-      else await api.post("/production", payload);
-      toast.success(editing ? "Job updated" : "Job created");
-      setOpen(false);
-      load();
-    } catch (err) {
-      toast.error(err?.response?.data?.detail || "Save failed");
-    }
+      await api.post("/production", { project_id: selectedProject, notes });
+      toast.success("Job created"); setOpen(false); load();
+    } catch (err) { toast.error(err?.response?.data?.detail || "Failed"); }
   };
 
-  const remove = async (id) => {
+  const updateStage = async (job, idx, newStatus) => {
+    try {
+      await api.put(`/production/${job.id}/stage/${idx}`, { status: newStatus });
+      toast.success("Stage updated"); load();
+    } catch (err) { toast.error(err?.response?.data?.detail || "Failed"); }
+  };
+
+  const removeJob = async (id) => {
     if (!window.confirm("Delete job?")) return;
-    await api.delete(`/production/${id}`);
-    load();
+    await api.delete(`/production/${id}`); load();
+  };
+
+  const stats = {
+    total: jobs.length,
+    inProgress: jobs.filter((j) => j.stages.some((s) => s.status === "in_progress")).length,
+    completed: jobs.filter((j) => j.progress === 100).length,
   };
 
   return (
@@ -51,56 +65,101 @@ export default function Production() {
         action={<Btn onClick={openCreate} data-testid="prod-create-btn"><Plus size={14} weight="bold" /> New Job</Btn>}
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-7 gap-3" data-testid="production-board">
-        {STAGES.map((stage) => {
-          const stageJobs = jobs.filter((j) => j.stage === stage);
-          return (
-            <div key={stage} className="lumia-surface p-3 min-h-[280px]">
-              <div className="flex items-center justify-between mb-3">
-                <div className="text-[10px] uppercase tracking-[0.15em] font-bold text-slate-700">{statusLabel(stage)}</div>
-                <span className="text-xs font-mono-num text-slate-500">{stageJobs.length}</span>
-              </div>
-              <div className="space-y-2">
-                {stageJobs.map((j) => (
-                  <div key={j.id} className="border border-slate-200 bg-white p-2 hover:border-[#0F3BE8] cursor-pointer transition-colors" onClick={() => openEdit(j)} data-testid={`prod-card-${j.id}`}>
-                    <div className="text-xs font-semibold text-slate-900 truncate">{j.project_name}</div>
-                    <div className="text-[10px] text-slate-500 mt-1">{j.assigned_to || "Unassigned"}</div>
-                    <div className="mt-2 h-1 bg-slate-100">
-                      <div className="h-1 bg-[#0F3BE8]" style={{ width: `${j.progress}%` }} />
-                    </div>
-                  </div>
-                ))}
-                {stageJobs.length === 0 && <div className="text-[11px] text-slate-400 italic">No jobs</div>}
-              </div>
-            </div>
-          );
-        })}
+      <div className="grid grid-cols-3 gap-4 mb-6">
+        <div className="lumia-surface p-4">
+          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Total Jobs</div>
+          <div className="text-2xl font-black font-mono-num">{stats.total}</div>
+        </div>
+        <div className="lumia-surface p-4">
+          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">In Progress</div>
+          <div className="text-2xl font-black font-mono-num text-[#FF4B00]">{stats.inProgress}</div>
+        </div>
+        <div className="lumia-surface p-4">
+          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Completed</div>
+          <div className="text-2xl font-black font-mono-num text-emerald-700">{stats.completed}</div>
+        </div>
       </div>
 
-      <Modal open={open} onClose={() => setOpen(false)} title={editing ? "Edit Job" : "New Production Job"} testid="prod-modal">
-        <form onSubmit={save} className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Field label="Project *">
-              <Select required value={form.project_id} onChange={(e) => setForm({ ...form, project_id: e.target.value })} data-testid="prod-input-project">
-                <option value="">— Select project —</option>
-                {projects.map((p) => <option key={p.id} value={p.id}>{p.project_no} · {p.name}</option>)}
-              </Select>
-            </Field>
-            <Field label="Stage">
-              <Select value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value })}>
-                {STAGES.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
-              </Select>
-            </Field>
-            <Field label="Assigned To"><Input value={form.assigned_to} onChange={(e) => setForm({ ...form, assigned_to: e.target.value })} /></Field>
-            <Field label="Progress (%)"><Input type="number" min="0" max="100" value={form.progress} onChange={(e) => setForm({ ...form, progress: e.target.value })} /></Field>
-          </div>
-          <Field label="Notes"><Textarea rows={3} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
-          <div className="flex justify-between pt-2">
-            {editing && <Btn variant="danger" type="button" onClick={() => { remove(editing.id); setOpen(false); }}><Trash size={14} weight="bold" /> Delete</Btn>}
-            <div className="flex gap-2 ml-auto">
-              <Btn variant="ghost" type="button" onClick={() => setOpen(false)}>Cancel</Btn>
-              <Btn variant="primary" type="submit" data-testid="prod-submit-btn">{editing ? "Update" : "Create"}</Btn>
+      {jobs.length === 0 ? (
+        <Empty title="No production jobs" note="Create a job from an approved project to start tracking stages." />
+      ) : (
+        <div className="space-y-4" data-testid="production-list">
+          {jobs.map((job) => (
+            <div key={job.id} className="lumia-surface p-5" data-testid={`prod-job-${job.id}`}>
+              <div className="flex items-start justify-between flex-wrap gap-3 mb-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono-num text-xs text-slate-500 font-semibold">{job.job_no}</span>
+                    <Factory size={14} className="text-slate-400" />
+                    <span className="text-xs text-slate-500">{job.project_no}</span>
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-900 tracking-tight">{job.project_name}</h3>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="text-right">
+                    <div className="text-[10px] uppercase tracking-wider font-semibold text-slate-500">Progress</div>
+                    <div className="font-mono-num font-black text-xl">{job.progress}%</div>
+                  </div>
+                  <div className="w-32 h-2 bg-slate-100">
+                    <div className="h-2 bg-[#0F3BE8] transition-all" style={{ width: `${job.progress}%` }} />
+                  </div>
+                  <button onClick={() => removeJob(job.id)} className="text-slate-400 hover:text-red-600 p-2"><Trash size={16} weight="bold" /></button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
+                {job.stages.map((s, idx) => {
+                  const Icon = STATUS_ICON[s.status];
+                  return (
+                    <button
+                      key={idx}
+                      onClick={() => updateStage(job, idx, STATUS_NEXT[s.status])}
+                      data-testid={`prod-stage-${job.id}-${idx}`}
+                      className={`border p-3 text-left transition-colors ${STATUS_BG[s.status]} hover:border-[#0F3BE8]`}
+                      title={`Click to ${STATUS_NEXT[s.status].replace("_", " ")}`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] uppercase tracking-wider font-bold text-slate-500">{idx + 1}</span>
+                        <Icon size={14} weight="bold" />
+                      </div>
+                      <div className="text-xs font-bold text-slate-900">{s.name}</div>
+                      <div className="text-[10px] uppercase tracking-wider mt-1 font-semibold">
+                        {s.status.replace("_", " ")}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              {job.notes && <div className="mt-3 text-xs text-slate-500 italic">{job.notes}</div>}
             </div>
+          ))}
+        </div>
+      )}
+
+      <Modal open={open} onClose={() => setOpen(false)} title="New Production Job" testid="prod-modal">
+        <form onSubmit={createJob} className="space-y-4">
+          {approvedProjects.length === 0 ? (
+            <div className="border border-amber-300 bg-amber-50 text-amber-900 text-sm p-3">
+              No approved projects available. <b>Sales must approve a project</b> before production can start.
+            </div>
+          ) : (
+            <>
+              <Field label="Approved Project *">
+                <select required value={selectedProject} onChange={(e) => setSelectedProject(e.target.value)} data-testid="prod-input-project" className="block w-full bg-white border border-slate-300 px-3 py-2 text-sm rounded-sm focus:outline-none focus:ring-2 focus:ring-[#0F3BE8]">
+                  {approvedProjects.map((p) => <option key={p.id} value={p.id}>{p.project_no} · {p.name}</option>)}
+                </select>
+              </Field>
+              <Field label="Notes">
+                <textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} className="block w-full bg-white border border-slate-300 px-3 py-2 text-sm rounded-sm" />
+              </Field>
+              <div className="text-xs text-slate-500">
+                Will auto-create 8 stages: {PRODUCTION_STAGES.join(" → ")}
+              </div>
+            </>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <Btn variant="ghost" type="button" onClick={() => setOpen(false)}>Cancel</Btn>
+            <Btn variant="primary" type="submit" disabled={approvedProjects.length === 0} data-testid="prod-submit-btn">Create Job</Btn>
           </div>
         </form>
       </Modal>

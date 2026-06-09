@@ -1,0 +1,48 @@
+{
+  "summary": "Phase 2 backend testing for LUMIASIGN ERP completed. All 18 pytest tests passed (100%) covering constants enum, suppliers CRUD+ledger, materials new fields/search/filter, stock in/out with cost rollup & negative-stock rejection, purchases (GST math, cash/credit terms, approve+receive flow), vendor payments (apply & reverse), project approve / complete-production, production with 8 stages + business rules, installations with photos & signoff, and dashboard/reports/profit-analysis new fields.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/purchases/{id}/receive", "issue": "Receives a PO regardless of its current status (pending/approved both accepted). The spec says 'on approved/pending PO'. This matches behaviour, but the workflow guard does not prevent receiving a 'cancelled' PO either."},
+      {"endpoint": "POST /api/installations/{id}/photo", "issue": "Photos stored unbounded as base64 strings inside the document; large data URLs could blow past MongoDB 16MB doc limit. Consider GridFS or external storage for production."},
+      {"endpoint": "GET /api/suppliers", "issue": "Outstanding rollup only counts credit-term POs; cash POs that became 'pending' for any reason are excluded. Acceptable per spec but worth noting."},
+      {"endpoint": "PO numbering / JOB numbering / INS numbering", "issue": "count_documents() based numbering is not concurrency-safe (race condition can produce duplicate po_no/job_no/install_no). Use an atomic counter."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase2_lumiasign.py",
+    "/app/backend/tests/test_lumiasign_erp.py",
+    "/app/test_reports/pytest/phase2_results.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: harden /api/purchases/{id}/receive to reject already-cancelled POs.",
+    "OPTIONAL: move sequence generation (PO/JOB/INS/PRJ/QT) to an atomic counter to avoid duplicate numbers under concurrency.",
+    "OPTIONAL: consider GridFS / object storage for installation photos to avoid MongoDB 16MB doc limit."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now ~1378 lines — split into routers (auth, sales, inventory, finance, production, installation, reports) for maintainability.",
+    "PO/JOB/INS/PRJ/QT auto-numbering uses count_documents() — race condition can yield duplicates; need atomic counter collection or unique index + retry.",
+    "Stock movement on 'out' does not record who performed it; audit trail (user_id) missing across mutating endpoints.",
+    "PUT /api/installations does not unwind project.status when status transitions back from 'completed' (edge case).",
+    "@app.on_event('startup') is deprecated; migrate to lifespan handler.",
+    "CORS allow_origins defaults to '*' with allow_credentials=True — tighten in production.",
+    "Installation photos stored as raw base64 inside the document — risks 16MB BSON cap; should use GridFS or S3.",
+    "stock_out cost rollup mutates a found dict and then $set's it back — works, but the upsert path is non-atomic; multiple concurrent stock-outs on same project may lose updates. Use $inc for material_cost and re-derive total_cost in a transaction.",
+    "purchase.receive does not validate status — a cancelled PO can still be 'received' and increment stock."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase2_lumiasign.py"
+  ],
+  "success_rate": {"backend": "100% (18/18)", "frontend": "not tested (skipped per request)"},
+  "test_credentials": "Used /app/memory/test_credentials.md - admin@lumiasign.com/admin123 + 5 role accounts with lumia123. All 6 roles authenticate and receive correct role in JWT.",
+  "seed_data_creation": "Seed runs on startup creating 4 suppliers, 10 materials across all categories, 4 leads, 5 projects (with approved/production_completed flags as per spec) + computed costs. Tests create TEST_ prefixed data and clean up after each test.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 2 backend is fully functional. Use /app/backend/tests/test_phase2_lumiasign.py as the canonical Phase 2 regression suite (18 tests, ~15s). Old /app/backend/tests/test_lumiasign_erp.py (Phase 1) may have stale field-name assertions (reorder_level → min_stock, unit_cost → purchase_rate); update or replace before re-running. All Phase 2 business rules verified: production cannot start without approved project (400), installation cannot start until production_completed (400), inventory cannot go negative (400 Insufficient stock), purchase GST math (subtotal=qty*rate, gst_amount=subtotal*gst_pct/100, total=subtotal+gst_amount), cash term auto-pays full, credit term stays pending, vendor payments flip PO to partial/paid and DELETE reverses, photo bucket validation works, signoff sets project.status='completed'. Dashboard exposes inventory_value, production_in_progress, installations_pending/completed, outstanding_payable, margin_alerts[], margin_threshold=15.0.",
+  "rca of the issue": "No issues found requiring RCA."
+}
