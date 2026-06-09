@@ -1,0 +1,97 @@
+{
+  "theme": "LIGHT",
+  "archetype": "Archetype 4 (Swiss & High-Contrast)",
+  "context": "Dashboard / SaaS App (Internal ERP for Manufacturing)",
+  "design_vision": "A professional, dense, data-rich industrial ERP system for Lumiasign LLP. It must feel solid, trustworthy, and precise. The design will use a multi-panel operational layout with high information density, clear visual hierarchy, and a classic structural aesthetic over decorative experimentation. No generic gradients or soft shadows; we use sharp borders, high contrast, and functional colors.",
+  "typography": {
+    "heading_font": "Chivo",
+    "body_font": "IBM Plex Sans",
+    "font_imports": [
+      "@import url('https://fonts.googleapis.com/css2?family=Chivo:wght@300;400;700;900&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');"
+    ],
+    "scale": {
+      "h1": "text-3xl sm:text-4xl font-black tracking-tight",
+      "h2": "text-2xl sm:text-3xl font-bold tracking-tight",
+      "h3": "text-xl sm:text-2xl font-bold",
+      "h4": "text-lg font-bold",
+      "body": "text-sm text-slate-800 leading-relaxed",
+      "labels": "text-xs font-semibold uppercase tracking-[0.1em] text-slate-500",
+      "kpi_numbers": "text-4xl font-black tracking-tighter text-slate-900"
+    },
+    "rules": "Never center headings by default. Left-align dense content. Use tight letter spacing for headings. Use IBM Plex Sans for all tabular data and body text for monospaced-like precision."
+  },
+  "color_palette": {
+    "background": {
+      "app": "#F1F5F9",
+      "surface": "#FFFFFF",
+      "surface_alt": "#F8FAFC"
+    },
+    "borders": {
+      "default": "#CBD5E1",
+      "focus": "#2563EB"
+    },
+    "text": {
+      "primary": "#0F172A",
+      "secondary": "#475569",
+      "tertiary": "#64748B"
+    },
+    "brand": {
+      "primary": "#0F3BE8",
+      "primary_hover": "#0C2EBA",
+      "accent": "#FF4B00",
+      "accent_hover": "#CC3C00"
+    },
+    "functional": {
+      "success": "#16A34A",
+      "warning": "#EAB308",
+      "error": "#DC2626",
+      "info": "#0284C7"
+    }
+  },
+  "layout_and_spacing": {
+    "spacing_scale": "Use generous spacing between macro-sections (p-6, p-8) but tight, dense spacing within tables and data widgets (p-2, p-4).",
+    "dashboard_grid": "Use a 'Control Room' grid. Base grid: grid-cols-1 md:grid-cols-4 lg:grid-cols-12. Gap: gap-4 or gap-6.",
+    "kpi_cards": "col-span-full md:col-span-6 lg:col-span-3. Sharp corners (rounded-none or rounded-sm max).",
+    "main_charts": "col-span-full lg:col-span-8 row-span-2. High density, clear axes.",
+    "data_tables": "col-span-full. Virtualized or heavily paginated. Compact row heights (h-10).",
+    "sidebar": "Collapsible left sidebar for role-gated navigation (Admin, Sales, Production, Store, Accounts, Installation)."
+  },
+  "component_rules": {
+    "buttons": "Square or slightly rounded (rounded-sm). High contrast. Primary buttons: bg-[#0F3BE8] text-white hover:bg-[#0C2EBA]. No soft shadows, use 1px solid borders if needed.",
+    "cards": "Flat solid background, 1px solid border (border-slate-300), no shadows. On hover: slight border color darkening.",
+    "tables": "Dense. border-collapse. border-b border-slate-200 on rows. Hover state on rows: bg-slate-50.",
+    "inputs": "Shadcn UI forms. Square or rounded-sm. Focus state must have high contrast ring (focus:ring-2 focus:ring-[#0F3BE8]).",
+    "badges": "For status tracking (New, In-Production, Installation, Completed). Sharp edges, bold text. e.g., bg-amber-100 text-amber-800 border border-amber-200.",
+    "tabs": "Flat, pill-less. Underline style active states or high-contrast background active states."
+  },
+  "motion_and_interactions": {
+    "hover_states": "All interactive elements must change background or border color on hover. Explicitly set text color.",
+    "transitions": "Fast and snappy. transition-colors duration-150 ease-in-out. No bouncy or slow animations.",
+    "loading": "Use skeleton loaders matching the table/grid structure instead of spinners."
+  },
+  "accessibility": {
+    "contrast": "Ensure text contrast meets APCA/WCAG standards. Never use gray-on-gray for essential data.",
+    "testing": "All interactive elements MUST have a 'data-testid' attribute (e.g., data-testid='login-submit-btn', data-testid='sidebar-nav-production')."
+  },
+  "media": {
+    "icon_library": "@phosphor-icons/react",
+    "icon_style": "Weight 'regular' or 'bold' for active states. Avoid thin/light icons for this dense industrial theme.",
+    "images": [
+      {
+        "url": "https://images.unsplash.com/photo-1717386255773-1e3037c81788?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODh8MHwxfHNlYXJjaHwxfHxpbmR1c3RyaWFsJTIwZmFjdG9yeSUyMGludGVyaW9yJTIwbWFudWZhY3R1cmluZ3xlbnwwfHx8fDE3ODEwMjQ5OTl8MA&ixlib=rb-4.1.0&q=85",
+        "category": "login_background",
+        "description": "Industrial factory interior, use as a split-screen 50% width background image on the login page with a subtle dark overlay (bg-slate-900/40) so the brand stands out."
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Install and configure Tailwind CSS and Shadcn UI. Override default radii to '0rem' or '0.125rem' (rounded-sm) in tailwind.config.js.",
+    "Install @phosphor-icons/react for iconography.",
+    "Implement a robust layout shell: a fixed left sidebar for navigation and a top header for global context (user profile, role badge).",
+    "For the Login screen: Build a 50/50 split layout. Left side: the provided factory image with a dark overlay. Right side: Login form with role selector.",
+    "Dashboard module: Implement KPI cards for Revenue, Profit, Pending Projects, Completed Projects, Low Stock Alerts.",
+    "Build the Projects Module as a dense data table or a kanban board using the exact layout spacing guidelines.",
+    "Ensure the UI feels 'dense'—do not use large paddings (like p-8) inside data tables. Use tight, tabular spacing.",
+    "Add 'data-testid' to every actionable item (buttons, links, form inputs) and dynamic data element (KPI numbers)."
+  ]
+}
