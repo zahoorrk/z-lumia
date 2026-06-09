@@ -4,7 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 import {
   Gauge, UsersThree, FileText, Stack, Factory, Package, ShoppingCart, Wrench,
   Calculator, ChartLineUp, ClipboardText, Truck, Crown, Receipt, Robot, Bell,
-  ListChecks, Lightning, SignOut, List as ListIcon, X,
+  ListChecks, Lightning, SignOut, List as ListIcon, X, Books, Money, BookOpenText,
 } from "@phosphor-icons/react";
 import { ROLE_LABEL } from "@/lib/constants";
 import NotificationsBell from "@/components/NotificationsBell";
@@ -12,7 +12,9 @@ import NotificationsBell from "@/components/NotificationsBell";
 const NAV = [
   { to: "/", label: "Dashboard", Icon: Gauge, roles: ["admin", "sales", "production", "store", "accounts", "installation"] },
   { to: "/ceo", label: "CEO View", Icon: Crown, roles: ["admin", "accounts"] },
+  { to: "/daybook", label: "Daybook", Icon: BookOpenText, roles: ["admin", "accounts"] },
   { to: "/leads", label: "Leads", Icon: UsersThree, roles: ["admin", "sales"] },
+  { to: "/parties", label: "Parties", Icon: Books, roles: ["admin", "sales", "accounts", "store"] },
   { to: "/quotations", label: "Quotations", Icon: FileText, roles: ["admin", "sales", "accounts"] },
   { to: "/projects", label: "Projects", Icon: Stack, roles: ["admin", "sales", "production", "installation", "accounts"] },
   { to: "/production", label: "Production", Icon: Factory, roles: ["admin", "production"] },
@@ -21,6 +23,7 @@ const NAV = [
   { to: "/purchases", label: "Purchases", Icon: ShoppingCart, roles: ["admin", "store", "accounts"] },
   { to: "/installation", label: "Installation", Icon: Wrench, roles: ["admin", "installation", "sales"] },
   { to: "/invoices", label: "Invoices", Icon: Receipt, roles: ["admin", "accounts", "sales"] },
+  { to: "/expenses", label: "Expenses", Icon: Money, roles: ["admin", "accounts"] },
   { to: "/costing", label: "Costing", Icon: Calculator, roles: ["admin", "accounts", "production"] },
   { to: "/profit", label: "Profit Analysis", Icon: ChartLineUp, roles: ["admin", "accounts"] },
   { to: "/ai-estimator", label: "AI Estimator", Icon: Robot, roles: ["admin", "sales", "accounts"] },

@@ -1369,6 +1369,8 @@ class InvoiceItem(BaseModel):
     description: str
     qty: float = 1
     unit_price: float = 0.0
+    discount_pct: float = 0.0
+    tax_pct: float = 18.0
 
 
 class InvoicePayment(BaseModel):
@@ -1382,6 +1384,7 @@ class InvoicePayment(BaseModel):
 class Invoice(BaseModel):
     id: str = Field(default_factory=gen_id)
     invoice_no: str
+    doc_type: str = "sale_invoice"  # sale_invoice | estimate | proforma | delivery_challan | sale_return | credit_note
     invoice_date: str = Field(default_factory=now_iso)
     project_id: str
     project_no: Optional[str] = ""
@@ -1389,7 +1392,9 @@ class Invoice(BaseModel):
     client_name: str
     client_gstin: Optional[str] = ""
     client_state: Optional[str] = "Maharashtra"
+    party_id: Optional[str] = None
     items: List[InvoiceItem] = []
+    discount_total: float = 0.0
     subtotal: float = 0.0
     gst_pct: float = 18.0
     cgst: float = 0.0
@@ -1401,7 +1406,7 @@ class Invoice(BaseModel):
     payments: List[InvoicePayment] = []
     amount_received: float = 0.0
     outstanding: float = 0.0
-    status: str = "draft"  # draft | sent | paid | partial | overdue
+    status: str = "draft"
     notes: Optional[str] = ""
     due_date: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)
@@ -1409,9 +1414,11 @@ class Invoice(BaseModel):
 
 class InvoiceCreate(BaseModel):
     project_id: str
+    doc_type: str = "sale_invoice"
     client_name: str
     client_gstin: Optional[str] = ""
     client_state: Optional[str] = "Maharashtra"
+    party_id: Optional[str] = None
     items: List[InvoiceItem] = []
     gst_pct: float = 18.0
     advance_received: float = 0.0
@@ -1427,8 +1434,20 @@ class PaymentIn(BaseModel):
 
 
 def _calc_invoice(items: List[InvoiceItem], gst_pct: float, intra_state: bool):
-    subtotal = round(sum(i.qty * i.unit_price for i in items), 2)
-    gst_amount = round(subtotal * gst_pct / 100, 2)
+    # per-line discount + per-line tax (if present) else use header gst_pct
+    line_taxables = []
+    line_taxes = []
+    discount_total = 0.0
+    for i in items:
+        gross = i.qty * i.unit_price
+        disc = gross * (i.discount_pct or 0) / 100
+        discount_total += disc
+        taxable = gross - disc
+        rate = i.tax_pct if (i.tax_pct is not None and i.tax_pct >= 0) else gst_pct
+        line_taxables.append(taxable)
+        line_taxes.append(taxable * rate / 100)
+    subtotal = round(sum(line_taxables), 2)
+    gst_amount = round(sum(line_taxes), 2)
     if intra_state:
         cgst = round(gst_amount / 2, 2)
         sgst = round(gst_amount - cgst, 2)
@@ -1438,7 +1457,7 @@ def _calc_invoice(items: List[InvoiceItem], gst_pct: float, intra_state: bool):
         sgst = 0.0
         igst = gst_amount
     total = round(subtotal + gst_amount, 2)
-    return subtotal, cgst, sgst, igst, gst_amount, total
+    return round(discount_total, 2), subtotal, cgst, sgst, igst, gst_amount, total
 
 
 @api.get("/invoices")
@@ -1458,14 +1477,14 @@ async def create_invoice(data: InvoiceCreate, user: dict = Depends(require_roles
     invoice_no = f"INV-{6000 + count + 1}"
     company_state = os.environ.get("COMPANY_STATE", "Maharashtra")
     intra_state = (data.client_state or "").strip().lower() == company_state.strip().lower()
-    subtotal, cgst, sgst, igst, gst_amount, total = _calc_invoice(data.items, data.gst_pct, intra_state)
+    discount_total, subtotal, cgst, sgst, igst, gst_amount, total = _calc_invoice(data.items, data.gst_pct, intra_state)
     inv = Invoice(
-        invoice_no=invoice_no, project_id=data.project_id,
+        invoice_no=invoice_no, doc_type=data.doc_type, project_id=data.project_id,
         project_no=project["project_no"], project_name=project["name"],
         client_name=data.client_name, client_gstin=data.client_gstin,
-        client_state=data.client_state, items=data.items,
-        subtotal=subtotal, gst_pct=data.gst_pct, cgst=cgst, sgst=sgst, igst=igst,
-        gst_amount=gst_amount, total=total,
+        client_state=data.client_state, party_id=data.party_id, items=data.items,
+        discount_total=discount_total, subtotal=subtotal, gst_pct=data.gst_pct,
+        cgst=cgst, sgst=sgst, igst=igst, gst_amount=gst_amount, total=total,
         advance_received=data.advance_received,
         amount_received=data.advance_received,
         outstanding=round(total - data.advance_received, 2),
@@ -1485,12 +1504,15 @@ async def update_invoice(inv_id: str, data: InvoiceCreate, user: dict = Depends(
     project = await _get("projects", data.project_id)
     company_state = os.environ.get("COMPANY_STATE", "Maharashtra")
     intra_state = (data.client_state or "").strip().lower() == company_state.strip().lower()
-    subtotal, cgst, sgst, igst, gst_amount, total = _calc_invoice(data.items, data.gst_pct, intra_state)
+    discount_total, subtotal, cgst, sgst, igst, gst_amount, total = _calc_invoice(data.items, data.gst_pct, intra_state)
     received = existing.get("amount_received", 0)
     update = {
+        "doc_type": data.doc_type,
         "project_id": data.project_id, "project_no": project["project_no"], "project_name": project["name"],
         "client_name": data.client_name, "client_gstin": data.client_gstin, "client_state": data.client_state,
-        "items": [i.model_dump() for i in data.items], "subtotal": subtotal,
+        "party_id": data.party_id,
+        "items": [i.model_dump() for i in data.items],
+        "discount_total": discount_total, "subtotal": subtotal,
         "gst_pct": data.gst_pct, "cgst": cgst, "sgst": sgst, "igst": igst,
         "gst_amount": gst_amount, "total": total,
         "outstanding": round(total - received, 2),
@@ -2075,6 +2097,298 @@ async def export_report(kind: str, user: dict = Depends(require_roles("accounts"
     else:
         raise HTTPException(status_code=400, detail=f"Unknown report kind: {kind}")
     return _csv(rows)
+
+
+# ============================================================
+# =================== VYAPAR-STYLE BILLING ===================
+# ============================================================
+
+# ---------- Parties (unified customer/supplier ledger) ----------
+class Party(BaseModel):
+    id: str = Field(default_factory=gen_id)
+    name: str
+    kind: str = "customer"  # customer | supplier | both
+    phone: Optional[str] = ""
+    email: Optional[str] = ""
+    gstin: Optional[str] = ""
+    state: Optional[str] = "Maharashtra"
+    address: Optional[str] = ""
+    opening_balance: float = 0.0  # +ve = receivable (they owe us), -ve = payable
+    opening_balance_date: Optional[str] = None
+    notes: Optional[str] = ""
+    created_at: str = Field(default_factory=now_iso)
+
+
+class PartyCreate(BaseModel):
+    name: str
+    kind: str = "customer"
+    phone: Optional[str] = ""
+    email: Optional[str] = ""
+    gstin: Optional[str] = ""
+    state: Optional[str] = "Maharashtra"
+    address: Optional[str] = ""
+    opening_balance: float = 0.0
+    opening_balance_date: Optional[str] = None
+    notes: Optional[str] = ""
+
+
+@api.get("/parties")
+async def list_parties(kind: Optional[str] = None, user: dict = Depends(get_current_user)):
+    query = {}
+    if kind in ("customer", "supplier", "both"):
+        query = {"$or": [{"kind": kind}, {"kind": "both"}]} if kind != "both" else {"kind": kind}
+    parties = await db.parties.find(query, {"_id": 0}).sort("name", 1).to_list(10000)
+
+    invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
+    payments = await db.vendor_payments.find({}, {"_id": 0}).to_list(10000)
+    purchases = await db.purchases.find({}, {"_id": 0}).to_list(10000)
+
+    for p in parties:
+        # Receivable side (invoices either by party_id or matching name)
+        recv = [i for i in invoices if i.get("party_id") == p["id"] or i.get("client_name") == p["name"]]
+        p["invoiced"] = round(sum(i["total"] for i in recv), 2)
+        p["received"] = round(sum(i["amount_received"] for i in recv), 2)
+        p["receivable"] = round(sum(i["outstanding"] for i in recv), 2)
+
+        # Payable side (purchases + vendor payments)
+        ps = [pu for pu in purchases if pu.get("supplier_id") == p["id"] or pu.get("supplier_name") == p["name"]]
+        pay = [pm for pm in payments if pm.get("supplier_id") == p["id"] or pm.get("supplier_name") == p["name"]]
+        p["billed"] = round(sum(pu["total"] for pu in ps), 2)
+        p["paid"] = round(sum(pm["amount"] for pm in pay), 2)
+        p["payable"] = round(sum((pu["total"] - pu.get("paid_amount", 0)) for pu in ps if pu.get("payment_terms") == "credit"), 2)
+
+        # Net balance = receivable - payable + opening
+        p["net_balance"] = round(p.get("opening_balance", 0) + p["receivable"] - p["payable"], 2)
+    return parties
+
+
+@api.post("/parties")
+async def create_party(data: PartyCreate, user: dict = Depends(require_roles("sales", "accounts", "store"))):
+    p = Party(**data.model_dump())
+    await db.parties.insert_one(p.model_dump())
+    await log_audit(user, "parties", f"Created party {p.name}", p.id)
+    return p.model_dump()
+
+
+@api.put("/parties/{pid}")
+async def update_party(pid: str, data: PartyCreate, user: dict = Depends(require_roles("sales", "accounts", "store"))):
+    await _get("parties", pid)
+    await db.parties.update_one({"id": pid}, {"$set": data.model_dump()})
+    return await _get("parties", pid)
+
+
+@api.delete("/parties/{pid}")
+async def delete_party(pid: str, user: dict = Depends(require_roles("admin"))):
+    await db.parties.delete_one({"id": pid})
+    return {"ok": True}
+
+
+@api.get("/parties/{pid}/ledger")
+async def party_ledger(pid: str, user: dict = Depends(get_current_user)):
+    party = await _get("parties", pid)
+    invoices = await db.invoices.find({"$or": [{"party_id": pid}, {"client_name": party["name"]}]}, {"_id": 0}).sort("invoice_date", 1).to_list(10000)
+    purchases = await db.purchases.find({"$or": [{"supplier_id": pid}, {"supplier_name": party["name"]}]}, {"_id": 0}).sort("purchase_date", 1).to_list(10000)
+    payments = await db.vendor_payments.find({"$or": [{"supplier_id": pid}, {"supplier_name": party["name"]}]}, {"_id": 0}).sort("created_at", 1).to_list(10000)
+
+    entries = []
+    for i in invoices:
+        entries.append({"date": i.get("invoice_date", i["created_at"]), "kind": "invoice", "ref": i["invoice_no"], "desc": f"Invoice — {i.get('doc_type', 'sale_invoice')}", "debit": i["total"], "credit": 0, "note": ""})
+        for p in i.get("payments", []):
+            entries.append({"date": p.get("date", ""), "kind": "receipt", "ref": i["invoice_no"], "desc": f"Receipt via {p.get('mode', '')}", "debit": 0, "credit": p["amount"], "note": p.get("note", "")})
+        if i.get("advance_received", 0) > 0:
+            entries.append({"date": i.get("invoice_date", ""), "kind": "advance", "ref": i["invoice_no"], "desc": "Advance", "debit": 0, "credit": i["advance_received"], "note": ""})
+    for p in purchases:
+        entries.append({"date": p.get("purchase_date", p["created_at"]), "kind": "bill", "ref": p["po_no"], "desc": f"Purchase Bill — {p.get('material_name', '')}", "debit": 0, "credit": p["total"], "note": ""})
+    for pm in payments:
+        entries.append({"date": pm.get("date", pm["created_at"]), "kind": "payment", "ref": pm.get("po_no", ""), "desc": f"Payment via {pm['method']}", "debit": pm["amount"], "credit": 0, "note": pm.get("note", "")})
+
+    entries.sort(key=lambda x: x["date"])
+    running = party.get("opening_balance", 0)
+    for e in entries:
+        running += e["debit"] - e["credit"]
+        e["running_balance"] = round(running, 2)
+
+    return {
+        "party": party,
+        "entries": entries,
+        "opening_balance": party.get("opening_balance", 0),
+        "closing_balance": round(running, 2),
+        "total_debit": round(sum(e["debit"] for e in entries), 2),
+        "total_credit": round(sum(e["credit"] for e in entries), 2),
+    }
+
+
+# ---------- Expenses ----------
+EXPENSE_CATEGORIES = [
+    "Rent", "Salaries", "Utilities", "Travel", "Transport", "Office Supplies",
+    "Marketing", "Software/Subscriptions", "Bank Charges", "Tax & Compliance",
+    "Repair & Maintenance", "Subcontract", "Miscellaneous",
+]
+
+
+class Expense(BaseModel):
+    id: str = Field(default_factory=gen_id)
+    expense_no: str
+    date: str = Field(default_factory=now_iso)
+    category: str
+    payee: Optional[str] = ""
+    amount: float
+    gst_pct: float = 0.0
+    gst_amount: float = 0.0
+    total: float = 0.0
+    mode: str = "cash"  # cash | upi | bank | cheque
+    account_id: Optional[str] = None  # cash/bank account
+    project_id: Optional[str] = None  # for project-attributed expenses
+    note: Optional[str] = ""
+    created_at: str = Field(default_factory=now_iso)
+
+
+class ExpenseCreate(BaseModel):
+    date: Optional[str] = None
+    category: str
+    payee: Optional[str] = ""
+    amount: float
+    gst_pct: float = 0.0
+    mode: str = "cash"
+    account_id: Optional[str] = None
+    project_id: Optional[str] = None
+    note: Optional[str] = ""
+
+
+@api.get("/expense-categories")
+async def expense_categories(user: dict = Depends(get_current_user)):
+    return EXPENSE_CATEGORIES
+
+
+@api.get("/expenses")
+async def list_expenses(category: Optional[str] = None, user: dict = Depends(require_roles("accounts"))):
+    query = {}
+    if category:
+        query["category"] = category
+    return await db.expenses.find(query, {"_id": 0}).sort("date", -1).to_list(10000)
+
+
+@api.post("/expenses")
+async def create_expense(data: ExpenseCreate, user: dict = Depends(require_roles("accounts"))):
+    count = await db.expenses.count_documents({})
+    no = f"EXP-{7000 + count + 1}"
+    gst_amount = round(data.amount * data.gst_pct / 100, 2)
+    total = round(data.amount + gst_amount, 2)
+    e = Expense(
+        expense_no=no, date=data.date or now_iso(), category=data.category, payee=data.payee,
+        amount=data.amount, gst_pct=data.gst_pct, gst_amount=gst_amount, total=total,
+        mode=data.mode, account_id=data.account_id, project_id=data.project_id, note=data.note,
+    )
+    await db.expenses.insert_one(e.model_dump())
+    await log_audit(user, "expenses", f"Recorded expense {no} ₹{total} {data.category}", e.id)
+    return e.model_dump()
+
+
+@api.delete("/expenses/{eid}")
+async def delete_expense(eid: str, user: dict = Depends(require_roles("admin", "accounts"))):
+    e = await _get("expenses", eid)
+    await db.expenses.delete_one({"id": eid})
+    await log_audit(user, "expenses", f"Deleted expense {e['expense_no']}", eid)
+    return {"ok": True}
+
+
+# ---------- Cash & Bank Accounts ----------
+class CashAccount(BaseModel):
+    id: str = Field(default_factory=gen_id)
+    name: str
+    kind: str = "cash"  # cash | bank | upi
+    opening_balance: float = 0.0
+    created_at: str = Field(default_factory=now_iso)
+
+
+class CashAccountCreate(BaseModel):
+    name: str
+    kind: str = "cash"
+    opening_balance: float = 0.0
+
+
+@api.get("/cash-accounts")
+async def list_cash_accounts(user: dict = Depends(require_roles("accounts", "admin"))):
+    accts = await db.cash_accounts.find({}, {"_id": 0}).sort("created_at", 1).to_list(100)
+    if not accts:
+        # seed default Cash + Bank accounts
+        defaults = [
+            {"name": "Cash in Hand", "kind": "cash"},
+            {"name": "Bank — Current A/c", "kind": "bank"},
+            {"name": "UPI Wallet", "kind": "upi"},
+        ]
+        for d in defaults:
+            await db.cash_accounts.insert_one(CashAccount(**d).model_dump())
+        accts = await db.cash_accounts.find({}, {"_id": 0}).sort("created_at", 1).to_list(100)
+
+    invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
+    expenses = await db.expenses.find({}, {"_id": 0}).to_list(10000)
+    vendor_payments = await db.vendor_payments.find({}, {"_id": 0}).to_list(10000)
+
+    # mode → likely account kind
+    MODE_KIND = {"cash": "cash", "upi": "upi", "bank": "bank", "cheque": "bank"}
+    for a in accts:
+        inflow = 0.0
+        for inv in invoices:
+            for p in inv.get("payments", []):
+                if MODE_KIND.get(p.get("mode")) == a["kind"]:
+                    inflow += p.get("amount", 0)
+            if inv.get("advance_received", 0) > 0 and a["kind"] == "bank":
+                inflow += inv["advance_received"]
+        outflow = sum(e["total"] for e in expenses if MODE_KIND.get(e.get("mode")) == a["kind"])
+        outflow += sum(p["amount"] for p in vendor_payments if MODE_KIND.get(p.get("method")) == a["kind"])
+        a["inflow"] = round(inflow, 2)
+        a["outflow"] = round(outflow, 2)
+        a["balance"] = round(a.get("opening_balance", 0) + inflow - outflow, 2)
+    return accts
+
+
+@api.post("/cash-accounts")
+async def create_cash_account(data: CashAccountCreate, user: dict = Depends(require_roles("accounts", "admin"))):
+    a = CashAccount(**data.model_dump())
+    await db.cash_accounts.insert_one(a.model_dump())
+    return a.model_dump()
+
+
+@api.delete("/cash-accounts/{aid}")
+async def delete_cash_account(aid: str, user: dict = Depends(require_roles("admin"))):
+    await db.cash_accounts.delete_one({"id": aid})
+    return {"ok": True}
+
+
+# ---------- Daybook (daily cash in/out) ----------
+@api.get("/daybook")
+async def daybook(date: Optional[str] = None, user: dict = Depends(require_roles("accounts", "admin"))):
+    target = (date or now_iso()[:10])
+
+    invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
+    expenses = await db.expenses.find({}, {"_id": 0}).to_list(10000)
+    vendor_payments = await db.vendor_payments.find({}, {"_id": 0}).to_list(10000)
+    purchases = await db.purchases.find({}, {"_id": 0}).to_list(10000)
+
+    entries = []
+    for inv in invoices:
+        idate = (inv.get("invoice_date") or "")[:10]
+        if inv.get("doc_type", "sale_invoice") == "sale_invoice" and idate == target:
+            entries.append({"time": inv.get("invoice_date", ""), "kind": "sale", "ref": inv["invoice_no"], "party": inv["client_name"], "desc": "Sale Invoice", "in": inv["total"], "out": 0, "mode": "billed"})
+        for p in inv.get("payments", []):
+            pdate = (p.get("date") or "")[:10]
+            if pdate == target:
+                entries.append({"time": p.get("date", ""), "kind": "receipt", "ref": inv["invoice_no"], "party": inv["client_name"], "desc": f"Receipt", "in": p["amount"], "out": 0, "mode": p.get("mode", "")})
+    for e in expenses:
+        if (e.get("date") or "")[:10] == target:
+            entries.append({"time": e["date"], "kind": "expense", "ref": e["expense_no"], "party": e.get("payee") or "", "desc": e["category"], "in": 0, "out": e["total"], "mode": e.get("mode", "")})
+    for pay in vendor_payments:
+        if (pay.get("date") or "")[:10] == target:
+            entries.append({"time": pay["date"], "kind": "vendor_payment", "ref": pay.get("po_no", ""), "party": pay.get("supplier_name", ""), "desc": "Vendor Payment", "in": 0, "out": pay["amount"], "mode": pay.get("method", "")})
+    for pu in purchases:
+        if (pu.get("purchase_date") or "")[:10] == target and pu.get("payment_terms") == "cash":
+            entries.append({"time": pu["purchase_date"], "kind": "purchase", "ref": pu["po_no"], "party": pu.get("supplier_name", ""), "desc": "Purchase Bill (cash)", "in": 0, "out": pu["total"], "mode": "cash"})
+
+    entries.sort(key=lambda x: x["time"])
+    total_in = round(sum(e["in"] for e in entries), 2)
+    total_out = round(sum(e["out"] for e in entries), 2)
+    return {"date": target, "entries": entries, "total_in": total_in, "total_out": total_out, "net": round(total_in - total_out, 2)}
 
 
 app.include_router(api)

@@ -2,12 +2,21 @@ import React, { useEffect, useMemo, useState } from "react";
 import api from "@/lib/api";
 import { PageHeader, Btn, StatusBadge, Modal, Field, Input, Select, Textarea, Empty } from "@/components/Bits";
 import { fmtINR } from "@/lib/constants";
-import { Plus, FilePdf, WhatsappLogo, EnvelopeSimple, PencilSimple, Trash, CurrencyInr, Receipt } from "@phosphor-icons/react";
+import { Plus, FilePdf, WhatsappLogo, EnvelopeSimple, PencilSimple, Trash, CurrencyInr, Receipt, Printer } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import jsPDF from "jspdf";
 
-const emptyItem = { description: "", qty: 1, unit_price: 0 };
-const emptyForm = { project_id: "", client_name: "", client_gstin: "", client_state: "Maharashtra", items: [{ ...emptyItem }], gst_pct: 18, advance_received: 0, notes: "", due_date: "" };
+const emptyItem = { description: "", qty: 1, unit_price: 0, discount_pct: 0, tax_pct: 18 };
+const emptyForm = { project_id: "", doc_type: "sale_invoice", client_name: "", client_gstin: "", client_state: "Maharashtra", items: [{ ...emptyItem }], gst_pct: 18, advance_received: 0, notes: "", due_date: "" };
+
+const DOC_TYPES = [
+  { v: "sale_invoice", l: "Tax Invoice" },
+  { v: "estimate", l: "Estimate / Quotation" },
+  { v: "proforma", l: "Proforma Invoice" },
+  { v: "delivery_challan", l: "Delivery Challan" },
+  { v: "sale_return", l: "Sale Return" },
+  { v: "credit_note", l: "Credit Note" },
+];
 
 function invoicePDF(inv, company) {
   const doc = new jsPDF("p", "mm", "a4");
@@ -106,16 +115,24 @@ export default function Invoices() {
     setForm({ ...emptyForm, project_id: projects[0]?.id || "", client_name: projects[0]?.client_name || "" });
     setOpen(true);
   };
-  const openEdit = (inv) => { setEditing(inv); setForm({ project_id: inv.project_id, client_name: inv.client_name, client_gstin: inv.client_gstin || "", client_state: inv.client_state || "Maharashtra", items: inv.items?.length ? inv.items : [{ ...emptyItem }], gst_pct: inv.gst_pct, advance_received: inv.advance_received, notes: inv.notes || "", due_date: inv.due_date?.slice(0,10) || "" }); setOpen(true); };
+  const openEdit = (inv) => { setEditing(inv); setForm({ project_id: inv.project_id, doc_type: inv.doc_type || "sale_invoice", client_name: inv.client_name, client_gstin: inv.client_gstin || "", client_state: inv.client_state || "Maharashtra", items: inv.items?.length ? inv.items.map(i => ({ ...emptyItem, ...i })) : [{ ...emptyItem }], gst_pct: inv.gst_pct, advance_received: inv.advance_received, notes: inv.notes || "", due_date: inv.due_date?.slice(0,10) || "" }); setOpen(true); };
 
   const setItem = (i, k, v) => { const items = [...form.items]; items[i] = { ...items[i], [k]: k === "description" ? v : Number(v) || 0 }; setForm({ ...form, items }); };
   const addItem = () => setForm({ ...form, items: [...form.items, { ...emptyItem }] });
   const rmItem = (i) => setForm({ ...form, items: form.items.filter((_, idx) => idx !== i) });
 
   const calc = useMemo(() => {
-    const subtotal = form.items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.unit_price) || 0), 0);
-    const gst = subtotal * (Number(form.gst_pct) || 0) / 100;
-    return { subtotal, gst, total: subtotal + gst };
+    let subtotal = 0, gst = 0, discount = 0;
+    form.items.forEach((it) => {
+      const gross = (Number(it.qty) || 0) * (Number(it.unit_price) || 0);
+      const disc = gross * (Number(it.discount_pct) || 0) / 100;
+      discount += disc;
+      const taxable = gross - disc;
+      subtotal += taxable;
+      const r = (it.tax_pct !== undefined && it.tax_pct !== "") ? Number(it.tax_pct) : Number(form.gst_pct);
+      gst += taxable * (r || 0) / 100;
+    });
+    return { discount, subtotal, gst, total: subtotal + gst };
   }, [form]);
 
   const [autoSendOpen, setAutoSendOpen] = useState(false);
@@ -151,6 +168,61 @@ export default function Invoices() {
       await api.post(`/invoices/${payTarget.id}/payments`, { ...payForm, amount: Number(payForm.amount) });
       toast.success("Payment recorded"); setPayOpen(false); load();
     } catch (err) { toast.error(err?.response?.data?.detail || "Failed"); }
+  };
+
+  const thermalPrint = (inv) => {
+    // 80mm thermal-style receipt
+    const w = window.open("", "_blank", "width=320,height=600");
+    const fmt = (n) => `₹${(n || 0).toLocaleString("en-IN")}`;
+    const docLabel = ({sale_invoice:"TAX INVOICE",estimate:"ESTIMATE",proforma:"PROFORMA",delivery_challan:"DELIVERY CHALLAN",sale_return:"SALE RETURN",credit_note:"CREDIT NOTE"})[inv.doc_type] || "INVOICE";
+    w.document.write(`
+      <html><head><title>${inv.invoice_no}</title>
+      <style>
+        @page { size: 80mm auto; margin: 4mm; }
+        body { font-family: 'Courier New', monospace; font-size: 11px; color: #000; width: 72mm; }
+        h1,h2,h3 { margin: 0; }
+        .center { text-align: center; }
+        .bold { font-weight: bold; }
+        .hr { border-top: 1px dashed #000; margin: 4px 0; }
+        table { width: 100%; border-collapse: collapse; }
+        td { padding: 2px 0; vertical-align: top; }
+        .r { text-align: right; }
+        .small { font-size: 10px; }
+      </style></head><body>
+        <div class="center bold"><h2>${company.name}</h2></div>
+        <div class="center small">${company.address}</div>
+        <div class="center small">GSTIN: ${company.gstin}</div>
+        <div class="center small">${company.phone}</div>
+        <div class="hr"></div>
+        <div class="center bold">${docLabel}</div>
+        <div class="small">No: ${inv.invoice_no}</div>
+        <div class="small">Date: ${(inv.invoice_date || "").slice(0,10)}</div>
+        <div class="small">Bill to: ${inv.client_name}</div>
+        ${inv.client_gstin ? `<div class="small">GSTIN: ${inv.client_gstin}</div>` : ""}
+        <div class="hr"></div>
+        <table>
+          <tr class="bold"><td>Item</td><td class="r">Qty</td><td class="r">Rate</td><td class="r">Amt</td></tr>
+          ${inv.items.map((it) => {
+            const gross = it.qty * it.unit_price;
+            const disc = gross * (it.discount_pct || 0) / 100;
+            return `<tr><td>${it.description}</td><td class="r">${it.qty}</td><td class="r">${it.unit_price}</td><td class="r">${(gross - disc).toFixed(0)}</td></tr>`;
+          }).join("")}
+        </table>
+        <div class="hr"></div>
+        <table class="small">
+          ${inv.discount_total ? `<tr><td>Discount</td><td class="r">${fmt(inv.discount_total)}</td></tr>` : ""}
+          <tr><td>Taxable</td><td class="r">${fmt(inv.subtotal)}</td></tr>
+          ${inv.igst > 0 ? `<tr><td>IGST</td><td class="r">${fmt(inv.igst)}</td></tr>` : `<tr><td>CGST</td><td class="r">${fmt(inv.cgst)}</td></tr><tr><td>SGST</td><td class="r">${fmt(inv.sgst)}</td></tr>`}
+        </table>
+        <div class="hr"></div>
+        <table class="bold"><tr><td>TOTAL</td><td class="r">${fmt(inv.total)}</td></tr></table>
+        ${inv.outstanding > 0 ? `<table class="small"><tr><td>Received</td><td class="r">${fmt(inv.amount_received)}</td></tr><tr class="bold"><td>BALANCE</td><td class="r">${fmt(inv.outstanding)}</td></tr></table>` : ""}
+        <div class="hr"></div>
+        <div class="center small">Thank you!</div>
+      </body></html>
+    `);
+    w.document.close();
+    setTimeout(() => w.print(), 500);
   };
 
   const sendWA = async (inv) => {
@@ -196,7 +268,12 @@ export default function Invoices() {
             <tbody>
               {list.map((i) => (
                 <tr key={i.id} className="border-t border-slate-200 hover:bg-slate-50" data-testid={`invoice-row-${i.id}`}>
-                  <td className="px-3 py-3 font-mono-num font-semibold">{i.invoice_no}</td>
+                  <td className="px-3 py-3 font-mono-num font-semibold">
+                    {i.invoice_no}
+                    {i.doc_type && i.doc_type !== "sale_invoice" && (
+                      <div className="mt-1 inline-block px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider border border-violet-300 bg-violet-50 text-violet-800">{i.doc_type.replace(/_/g, " ")}</div>
+                    )}
+                  </td>
                   <td className="px-3 py-3 text-xs text-slate-500">{i.invoice_date?.slice(0,10)}</td>
                   <td className="px-3 py-3 font-semibold">{i.client_name}</td>
                   <td className="px-3 py-3 text-xs text-slate-600">{i.project_no} · {i.project_name}</td>
@@ -208,7 +285,8 @@ export default function Invoices() {
                   <td className="px-3 py-3"><StatusBadge status={i.status} /></td>
                   <td className="px-3 py-3 text-right whitespace-nowrap">
                     {i.outstanding > 0 && <button onClick={() => openPayment(i)} className="text-emerald-700 hover:text-emerald-900 p-1.5" title="Record payment" data-testid={`invoice-pay-${i.id}`}><CurrencyInr size={16} weight="bold" /></button>}
-                    <button onClick={() => invoicePDF(i, company)} className="text-slate-500 hover:text-[#0F3BE8] p-1.5" title="Download PDF" data-testid={`invoice-pdf-${i.id}`}><FilePdf size={16} weight="bold" /></button>
+                    <button onClick={() => invoicePDF(i, company)} className="text-slate-500 hover:text-[#0F3BE8] p-1.5" title="A4 PDF" data-testid={`invoice-pdf-${i.id}`}><FilePdf size={16} weight="bold" /></button>
+                    <button onClick={() => thermalPrint(i)} className="text-slate-500 hover:text-[#0F3BE8] p-1.5" title="Thermal Print" data-testid={`invoice-thermal-${i.id}`}><Printer size={16} weight="bold" /></button>
                     <button onClick={() => sendWA(i)} className="text-slate-500 hover:text-emerald-600 p-1.5" title="WhatsApp"><WhatsappLogo size={16} weight="bold" /></button>
                     <button onClick={() => sendEmail(i)} className="text-slate-500 hover:text-[#0F3BE8] p-1.5" title="Email"><EnvelopeSimple size={16} weight="bold" /></button>
                     <button onClick={() => openEdit(i)} className="text-slate-500 hover:text-[#0F3BE8] p-1.5"><PencilSimple size={16} weight="bold" /></button>
@@ -230,33 +308,41 @@ export default function Invoices() {
             </Select>
           </Field>
           <div className="grid grid-cols-3 gap-4">
+            <Field label="Document Type">
+              <Select value={form.doc_type} onChange={(e) => setForm({ ...form, doc_type: e.target.value })} data-testid="invoice-input-doctype">
+                {DOC_TYPES.map((d) => <option key={d.v} value={d.v}>{d.l}</option>)}
+              </Select>
+            </Field>
             <Field label="Client *"><Input required value={form.client_name} onChange={(e) => setForm({ ...form, client_name: e.target.value })} data-testid="invoice-input-client" /></Field>
             <Field label="Client GSTIN"><Input value={form.client_gstin} onChange={(e) => setForm({ ...form, client_gstin: e.target.value })} /></Field>
-            <Field label="Client State"><Input value={form.client_state} onChange={(e) => setForm({ ...form, client_state: e.target.value })} /></Field>
           </div>
+          <Field label="Client State"><Input value={form.client_state} onChange={(e) => setForm({ ...form, client_state: e.target.value })} /></Field>
           <div>
             <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Line items</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Line items (per-line discount + tax)</span>
               <button type="button" onClick={addItem} className="text-xs text-[#0F3BE8] font-bold uppercase tracking-wider">+ Add</button>
             </div>
             <div className="space-y-2">
               {form.items.map((it, i) => (
                 <div key={i} className="grid grid-cols-12 gap-2">
-                  <Input className="col-span-6" placeholder="Description" value={it.description} onChange={(e) => setItem(i, "description", e.target.value)} data-testid={`invoice-item-desc-${i}`} />
-                  <Input className="col-span-2" type="number" placeholder="Qty" value={it.qty} onChange={(e) => setItem(i, "qty", e.target.value)} />
-                  <Input className="col-span-3" type="number" placeholder="Unit price" value={it.unit_price} onChange={(e) => setItem(i, "unit_price", e.target.value)} />
-                  <button type="button" onClick={() => rmItem(i)} className="col-span-1 text-slate-400 hover:text-red-600"><Trash size={16} /></button>
+                  <Input className="col-span-5" placeholder="Description" value={it.description} onChange={(e) => setItem(i, "description", e.target.value)} data-testid={`invoice-item-desc-${i}`} />
+                  <Input className="col-span-1" type="number" placeholder="Qty" value={it.qty} onChange={(e) => setItem(i, "qty", e.target.value)} />
+                  <Input className="col-span-2" type="number" placeholder="Rate" value={it.unit_price} onChange={(e) => setItem(i, "unit_price", e.target.value)} />
+                  <Input className="col-span-1" type="number" placeholder="Disc%" value={it.discount_pct ?? 0} onChange={(e) => setItem(i, "discount_pct", e.target.value)} title="Discount %" data-testid={`invoice-item-disc-${i}`} />
+                  <Input className="col-span-2" type="number" placeholder="Tax%" value={it.tax_pct ?? 18} onChange={(e) => setItem(i, "tax_pct", e.target.value)} title="GST %" data-testid={`invoice-item-tax-${i}`} />
+                  <button type="button" onClick={() => rmItem(i)} className="col-span-1 text-slate-400 hover:text-red-600 flex items-center justify-center"><Trash size={16} /></button>
                 </div>
               ))}
             </div>
           </div>
           <div className="grid grid-cols-3 gap-4">
-            <Field label="GST %"><Input type="number" value={form.gst_pct} onChange={(e) => setForm({ ...form, gst_pct: e.target.value })} /></Field>
+            <Field label="Default GST %"><Input type="number" value={form.gst_pct} onChange={(e) => setForm({ ...form, gst_pct: e.target.value })} /></Field>
             <Field label="Advance Received (₹)"><Input type="number" value={form.advance_received} onChange={(e) => setForm({ ...form, advance_received: e.target.value })} /></Field>
             <Field label="Due Date"><Input type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} /></Field>
           </div>
-          <div className="bg-slate-50 border border-slate-300 p-3 grid grid-cols-3 text-sm">
-            <div><div className="text-[10px] uppercase text-slate-500 font-bold">Subtotal</div><div className="font-mono-num font-bold">{fmtINR(calc.subtotal)}</div></div>
+          <div className="bg-slate-50 border border-slate-300 p-3 grid grid-cols-4 text-sm">
+            <div><div className="text-[10px] uppercase text-slate-500 font-bold">Discount</div><div className="font-mono-num font-bold text-amber-700">{fmtINR(calc.discount)}</div></div>
+            <div><div className="text-[10px] uppercase text-slate-500 font-bold">Taxable</div><div className="font-mono-num font-bold">{fmtINR(calc.subtotal)}</div></div>
             <div><div className="text-[10px] uppercase text-slate-500 font-bold">GST</div><div className="font-mono-num font-bold">{fmtINR(calc.gst)}</div></div>
             <div><div className="text-[10px] uppercase text-slate-500 font-bold">Total</div><div className="font-mono-num text-xl font-black text-[#0F3BE8]">{fmtINR(calc.total)}</div></div>
           </div>

@@ -15,6 +15,9 @@ import Purchases from "@/pages/Purchases";
 import Suppliers from "@/pages/Suppliers";
 import InstallationPage from "@/pages/Installation";
 import Invoices from "@/pages/Invoices";
+import Parties from "@/pages/Parties";
+import Expenses from "@/pages/Expenses";
+import Daybook from "@/pages/Daybook";
 import Costing from "@/pages/Costing";
 import ProfitAnalysis from "@/pages/ProfitAnalysis";
 import AICostEstimator from "@/pages/AICostEstimator";
@@ -50,6 +53,9 @@ export default function App() {
             <Route path="purchases" element={<Protected roles={["store", "accounts"]}><Purchases /></Protected>} />
             <Route path="installation" element={<Protected roles={["installation", "sales"]}><InstallationPage /></Protected>} />
             <Route path="invoices" element={<Protected roles={["accounts", "sales"]}><Invoices /></Protected>} />
+            <Route path="parties" element={<Protected roles={["sales", "accounts", "store"]}><Parties /></Protected>} />
+            <Route path="expenses" element={<Protected roles={["accounts"]}><Expenses /></Protected>} />
+            <Route path="daybook" element={<Protected roles={["accounts"]}><Daybook /></Protected>} />
             <Route path="costing" element={<Protected roles={["accounts", "production"]}><Costing /></Protected>} />
             <Route path="profit" element={<Protected roles={["accounts"]}><ProfitAnalysis /></Protected>} />
             <Route path="ai-estimator" element={<Protected roles={["sales", "accounts"]}><AICostEstimator /></Protected>} />

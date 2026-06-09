@@ -1,0 +1,43 @@
+{
+  "summary": "Phase 3.5 (Vyapar-style billing) backend testing complete. Created /app/backend/tests/test_phase35_vyapar.py with 26 pytest cases covering: per-line discount + tax_pct invoice math (incl. the spec example → discount 1000, subtotal 12000, gst 1980, total 13980), header gst fallback, intra-/inter-state CGST+SGST vs IGST split, all 6 doc_types persistence on create + update, Parties CRUD with role gating, enriched aggregates (invoiced/received/receivable/billed/paid/payable/net_balance), kind filter, party ledger with running balance + opening/closing/total_debit/total_credit (verified entries from invoices + receipts + advances + purchase bills + vendor payments), Expenses (13 categories, EXP-7XXX numbering, GST calc, role-gating), Cash & Bank accounts auto-seed (Cash/Bank/UPI) with inflow/outflow/balance formula and admin-only delete, and Daybook default-today + date-filter with in/out/net totals. ALL 26 PHASE 3.5 TESTS PASSED on first run. Regression: ran prior phase suites — Phase 2 and Phase 3 fully green; Phase 1 has 4 pre-existing schema/state-machine failures unrelated to Phase 3.5 (see context).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/parties?kind=customer", "issue": "Filter logic uses {'$or': [{'kind':'customer'},{'kind':'both'}]} but ?kind=both returns only kind=='both' (excludes pure customer/supplier). Minor inconsistency — works for the docstring contract (kind=customer|supplier|both) but 'both' as a filter is rarely meaningful. No functional impact."},
+      {"endpoint": "GET /api/cash-accounts", "issue": "Advance receipts on invoice are unconditionally credited to the 'bank' kind account (line 2336-2337) regardless of payment mode the advance was received via. If user takes a cash advance, balance still flows to Bank — heuristic limitation, not a bug per spec."},
+      {"endpoint": "GET /api/parties (aggregates)", "issue": "Aggregates 'received' = sum(invoice.amount_received) which includes advances; 'invoiced' uses invoice.total. Consistent with code but worth documenting that 'received' includes advance_received."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase35_vyapar.py",
+    "/app/test_reports/pytest/phase35_results.xml"
+  ],
+  "action_items": [
+    "No action required for Phase 3.5 — all new endpoints and math behave per spec.",
+    "Pre-existing Phase 1 test failures (4) are unrelated: production lifecycle now requires project approval first; purchases schema requires supplier_name; installation schema requires site_location; one route returns 405. Main agent may want to update /app/backend/tests/test_lumiasign_erp.py to match the current schemas, but this is outside Phase 3.5 scope."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 2410 lines — well past the 700-line guideline. Recommend splitting into modules: routers/{invoices,parties,expenses,cash_accounts,daybook}.py + services/aggregations.py. Maintainability risk is growing.",
+    "GET /api/parties and GET /api/cash-accounts both load full invoices/purchases/vendor_payments collections in-memory (to_list(10000)) on every call to compute aggregates. Will not scale beyond a few thousand rows. Consider Mongo aggregation pipelines or per-party indexed lookups.",
+    "Party ledger entries use string date sort (entries.sort(key=lambda x: x['date'])). Mixed ISO dates with/without timezone or with date-only strings could sort incorrectly. Consider normalizing to ISO-8601 UTC before sort.",
+    "Daybook default 'today' uses now_iso()[:10] which is UTC-based; users in IST may see entries shift across midnight. Consider TZ-aware date logic if multi-region.",
+    "CashAccount.kind heuristic 'cheque' → 'bank' is reasonable but undocumented; consider adding a mode→account_id direct link on Expense/InvoicePayment so balances are deterministic, not heuristic.",
+    "PUT /api/parties does full overwrite via data.model_dump(); fields not in PartyCreate get reset. Currently PartyCreate covers all editable fields, but adding fields later requires care.",
+    "EXP-7XXX numbering uses count_documents — non-atomic; concurrent expense creation could produce duplicate numbers. Same pattern exists for INV-6XXX. Use a counter collection or unique index + retry."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase35_vyapar.py (new)"
+  ],
+  "success_rate": {"backend": "100% (26/26 Phase 3.5)", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "Loaded from /app/memory/test_credentials.md — admin@lumiasign.com/admin123, accounts@lumiasign.com/lumia123, sales@lumiasign.com/lumia123. All logins successful.",
+  "seed_data_creation": "Tests create TEST_-prefixed parties, invoices, expenses, and cash accounts. Auto-seed of Cash in Hand / Bank — Current A/c / UPI Wallet verified on first GET /api/cash-accounts. No teardown — TEST_ rows persist in DB (consistent with prior phase tests).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Phase 3.5 = Vyapar-style billing additions. Test file: /app/backend/tests/test_phase35_vyapar.py (26 tests, all green). The new endpoints are: POST/GET/PUT/DELETE /api/parties, GET /api/parties/{id}/ledger, GET /api/expense-categories, POST/GET/DELETE /api/expenses, GET/POST/DELETE /api/cash-accounts, GET /api/daybook. Invoice now has doc_type field and items have discount_pct + tax_pct. _calc_invoice returns 7-tuple (discount_total, subtotal, cgst, sgst, igst, gst_amount, total). Pre-existing Phase 1 failures (test_lumiasign_erp.py: TestProduction, TestMaterialsStock, TestPurchases, TestInstallation) need test updates to match current schemas — unrelated to Phase 3.5.",
+  "rca of the issue": "No bugs in Phase 3.5. The 4 pre-existing Phase 1 failures: (1) test_production_lifecycle gets 400 'Project must be approved before production can start' — workflow tightened to require approval; (2) test_material_crud_and_stock gets 405 — likely route method change (probably DELETE vs PATCH); (3) test_purchase_receive_flow gets 422 missing 'supplier_name' — schema renamed 'vendor' → 'supplier_name'; (4) test_install_flow gets 422 missing 'site_location' — schema added required field. Mitigation: update test_lumiasign_erp.py payloads to match current models (supplier_name, site_location) and add an approval step before production. Out of Phase 3.5 scope."
+}
