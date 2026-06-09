@@ -89,8 +89,8 @@ export default function CEODashboard() {
         <div className="lumia-surface p-5">
           <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Trend</div>
           <h3 className="text-lg font-bold tracking-tight">Monthly Revenue</h3>
-          <div className="h-64 mt-3">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="h-64 mt-3" style={{ minWidth: 0 }}>
+            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
               <AreaChart data={d.monthly}>
                 <defs><linearGradient id="rev2" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#0F3BE8" stopOpacity={0.35} /><stop offset="100%" stopColor="#0F3BE8" stopOpacity={0} /></linearGradient></defs>
                 <CartesianGrid stroke="#E2E8F0" vertical={false} />
@@ -105,8 +105,8 @@ export default function CEODashboard() {
         <div className="lumia-surface p-5">
           <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Trend</div>
           <h3 className="text-lg font-bold tracking-tight">Monthly Profit</h3>
-          <div className="h-64 mt-3">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="h-64 mt-3" style={{ minWidth: 0 }}>
+            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
               <BarChart data={d.monthly}>
                 <CartesianGrid stroke="#E2E8F0" vertical={false} />
                 <XAxis dataKey="month" stroke="#64748B" fontSize={11} tickLine={false} axisLine={false} />

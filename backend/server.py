@@ -109,7 +109,7 @@ async def _get(collection: str, item_id: str) -> dict:
 
 
 async def _list(collection: str, query: dict = None) -> List[dict]:
-    return await db[collection].find(query or {}, {"_id": 0}).sort("created_at", -1).to_list(10000)
+    return await db[collection].find(query or {}, {"_id": 0}).sort("created_at", -1).to_list(2000)
 
 
 # ---------- Models ----------
@@ -489,12 +489,12 @@ async def constants(user: dict = Depends(get_current_user)):
 # ---------- Dashboard ----------
 @api.get("/dashboard/stats")
 async def dashboard_stats(user: dict = Depends(get_current_user)):
-    projects = await db.projects.find({}, {"_id": 0}).to_list(10000)
-    materials = await db.materials.find({}, {"_id": 0}).to_list(10000)
-    costs = await db.costs.find({}, {"_id": 0}).to_list(10000)
-    installations = await db.installations.find({}, {"_id": 0}).to_list(10000)
-    jobs = await db.production_jobs.find({}, {"_id": 0}).to_list(10000)
-    purchases = await db.purchases.find({}, {"_id": 0}).to_list(10000)
+    projects = await db.projects.find({}, {"_id": 0}).to_list(2000)
+    materials = await db.materials.find({}, {"_id": 0}).to_list(2000)
+    costs = await db.costs.find({}, {"_id": 0}).to_list(2000)
+    installations = await db.installations.find({}, {"_id": 0}).to_list(2000)
+    jobs = await db.production_jobs.find({}, {"_id": 0}).to_list(2000)
+    purchases = await db.purchases.find({}, {"_id": 0}).to_list(2000)
 
     completed = [p for p in projects if p["status"] == "completed"]
     pending = [p for p in projects if p["status"] not in ("completed", "cancelled")]
@@ -624,7 +624,7 @@ async def list_projects(q: Optional[str] = None, status: Optional[str] = None, u
     query: dict = {}
     if status:
         query["status"] = status
-    docs = await db.projects.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
+    docs = await db.projects.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
     if q:
         qlow = q.lower()
         docs = [d for d in docs if qlow in d.get("name", "").lower() or qlow in d.get("client_name", "").lower() or qlow in d.get("project_no", "").lower()]
@@ -684,8 +684,8 @@ async def delete_project(project_id: str, user: dict = Depends(require_roles("sa
 @api.get("/suppliers")
 async def list_suppliers(user: dict = Depends(require_roles("store", "accounts"))):
     suppliers = await _list("suppliers")
-    purchases = await db.purchases.find({}, {"_id": 0}).to_list(10000)
-    payments = await db.vendor_payments.find({}, {"_id": 0}).to_list(10000)
+    purchases = await db.purchases.find({}, {"_id": 0}).to_list(2000)
+    payments = await db.vendor_payments.find({}, {"_id": 0}).to_list(2000)
 
     for s in suppliers:
         sup_pos = [p for p in purchases if p.get("supplier_id") == s["id"]]
@@ -722,8 +722,8 @@ async def delete_supplier(sup_id: str, user: dict = Depends(require_roles("store
 @api.get("/suppliers/{sup_id}/ledger")
 async def supplier_ledger(sup_id: str, user: dict = Depends(require_roles("store", "accounts"))):
     supplier = await _get("suppliers", sup_id)
-    purchases = await db.purchases.find({"supplier_id": sup_id}, {"_id": 0}).sort("created_at", -1).to_list(10000)
-    payments = await db.vendor_payments.find({"supplier_id": sup_id}, {"_id": 0}).sort("created_at", -1).to_list(10000)
+    purchases = await db.purchases.find({"supplier_id": sup_id}, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    payments = await db.vendor_payments.find({"supplier_id": sup_id}, {"_id": 0}).sort("created_at", -1).to_list(2000)
     total_billed = sum(p.get("total", 0) for p in purchases)
     total_paid = sum(p.get("amount", 0) for p in payments)
     return {
@@ -742,7 +742,7 @@ async def list_materials(q: Optional[str] = None, category: Optional[str] = None
     query = {}
     if category:
         query["category"] = category
-    docs = await db.materials.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
+    docs = await db.materials.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
     if q:
         qlow = q.lower()
         docs = [m for m in docs if qlow in m["name"].lower() or qlow in m["code"].lower() or qlow in m.get("category", "").lower()]
@@ -787,7 +787,7 @@ async def list_stock_moves(type: Optional[str] = None, user: dict = Depends(requ
     query = {}
     if type in ("in", "out"):
         query["type"] = type
-    return await db.stock_movements.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
+    return await db.stock_movements.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
 
 
 @api.post("/stock/in")
@@ -963,7 +963,7 @@ async def list_vendor_payments(supplier_id: Optional[str] = None, user: dict = D
     query = {}
     if supplier_id:
         query["supplier_id"] = supplier_id
-    return await db.vendor_payments.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
+    return await db.vendor_payments.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
 
 
 @api.post("/vendor-payments")
@@ -1467,7 +1467,7 @@ async def list_invoices(client: Optional[str] = None, status: Optional[str] = No
         query["client_name"] = client
     if status:
         query["status"] = status
-    return await db.invoices.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
+    return await db.invoices.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
 
 
 @api.post("/invoices")
@@ -1566,8 +1566,8 @@ async def delete_invoice(inv_id: str, user: dict = Depends(require_roles("accoun
 # ---------- GST Reports ----------
 @api.get("/gst/summary")
 async def gst_summary(user: dict = Depends(require_roles("accounts"))):
-    invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
-    purchases = await db.purchases.find({}, {"_id": 0}).to_list(10000)
+    invoices = await db.invoices.find({}, {"_id": 0}).to_list(2000)
+    purchases = await db.purchases.find({}, {"_id": 0}).to_list(2000)
     output_subtotal = sum(i["subtotal"] for i in invoices)
     output_gst = sum(i["gst_amount"] for i in invoices)
     output_cgst = sum(i.get("cgst", 0) for i in invoices)
@@ -1586,7 +1586,7 @@ async def gst_summary(user: dict = Depends(require_roles("accounts"))):
 
 @api.get("/gst/monthly")
 async def gst_monthly(user: dict = Depends(require_roles("accounts"))):
-    invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
+    invoices = await db.invoices.find({}, {"_id": 0}).to_list(2000)
     bucket = {}
     for i in invoices:
         try:
@@ -1604,12 +1604,12 @@ async def gst_monthly(user: dict = Depends(require_roles("accounts"))):
 # ---------- CEO Dashboard ----------
 @api.get("/ceo/dashboard")
 async def ceo_dashboard(user: dict = Depends(require_roles("admin", "accounts"))):
-    projects = await db.projects.find({}, {"_id": 0}).to_list(10000)
-    costs = await db.costs.find({}, {"_id": 0}).to_list(10000)
-    materials = await db.materials.find({}, {"_id": 0}).to_list(10000)
-    invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
-    purchases = await db.purchases.find({}, {"_id": 0}).to_list(10000)
-    installations = await db.installations.find({}, {"_id": 0}).to_list(10000)
+    projects = await db.projects.find({}, {"_id": 0}).to_list(2000)
+    costs = await db.costs.find({}, {"_id": 0}).to_list(2000)
+    materials = await db.materials.find({}, {"_id": 0}).to_list(2000)
+    invoices = await db.invoices.find({}, {"_id": 0}).to_list(2000)
+    purchases = await db.purchases.find({}, {"_id": 0}).to_list(2000)
+    installations = await db.installations.find({}, {"_id": 0}).to_list(2000)
 
     cost_map = {c["project_id"]: c for c in costs}
     completed = [p for p in projects if p["status"] == "completed"]
@@ -1715,8 +1715,8 @@ async def ceo_dashboard(user: dict = Depends(require_roles("admin", "accounts"))
 # ---------- Profit Analytics (extended) ----------
 @api.get("/analytics/profit-by-client")
 async def profit_by_client(user: dict = Depends(require_roles("accounts", "admin"))):
-    projects = await db.projects.find({}, {"_id": 0}).to_list(10000)
-    costs = await db.costs.find({}, {"_id": 0}).to_list(10000)
+    projects = await db.projects.find({}, {"_id": 0}).to_list(2000)
+    costs = await db.costs.find({}, {"_id": 0}).to_list(2000)
     cost_map = {c["project_id"]: c for c in costs}
     bucket = {}
     for p in projects:
@@ -1741,8 +1741,8 @@ async def profit_by_category(user: dict = Depends(require_roles("accounts", "adm
         "Acrylic": ["acrylic"], "Pylon": ["pylon"], "Wayfinding": ["wayfinding"],
         "Retail": ["retail", "storefront"], "Vehicle": ["vehicle"], "Other": [],
     }
-    projects = await db.projects.find({}, {"_id": 0}).to_list(10000)
-    costs = await db.costs.find({}, {"_id": 0}).to_list(10000)
+    projects = await db.projects.find({}, {"_id": 0}).to_list(2000)
+    costs = await db.costs.find({}, {"_id": 0}).to_list(2000)
     cost_map = {c["project_id"]: c for c in costs}
     bucket = {}
     for p in projects:
@@ -1787,7 +1787,7 @@ async def project_health(project_id: str, user: dict = Depends(get_current_user)
 
     # Material risk: any production stages stalled or stock too low?
     mat_score, mat_color = 80, "green"
-    materials = await db.materials.find({}, {"_id": 0}).to_list(10000)
+    materials = await db.materials.find({}, {"_id": 0}).to_list(2000)
     if any(m["stock_qty"] <= m["min_stock"] for m in materials):
         mat_score, mat_color = 55, "yellow"
 
@@ -1934,12 +1934,12 @@ async def _render_template(template: str, project_id: Optional[str], invoice_id:
 @api.get("/notifications")
 async def list_notifications(user: dict = Depends(get_current_user)):
     notes = []
-    materials = await db.materials.find({}, {"_id": 0}).to_list(10000)
+    materials = await db.materials.find({}, {"_id": 0}).to_list(2000)
     for m in materials:
         if m["stock_qty"] <= m["min_stock"]:
             notes.append({"kind": "low_stock", "severity": "high", "title": f"Low stock: {m['name']}", "message": f"{m['stock_qty']} {m['unit']} (min {m['min_stock']})", "ref_id": m["id"]})
 
-    invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
+    invoices = await db.invoices.find({}, {"_id": 0}).to_list(2000)
     today = datetime.now(timezone.utc)
     for inv in invoices:
         if inv.get("outstanding", 0) > 0 and inv.get("due_date"):
@@ -1950,7 +1950,7 @@ async def list_notifications(user: dict = Depends(get_current_user)):
             except Exception:
                 pass
 
-    projects = await db.projects.find({}, {"_id": 0}).to_list(10000)
+    projects = await db.projects.find({}, {"_id": 0}).to_list(2000)
     for p in projects:
         if p.get("end_date") and p["status"] not in ("completed", "cancelled"):
             try:
@@ -1960,7 +1960,7 @@ async def list_notifications(user: dict = Depends(get_current_user)):
             except Exception:
                 pass
 
-    installations = await db.installations.find({}, {"_id": 0}).to_list(10000)
+    installations = await db.installations.find({}, {"_id": 0}).to_list(2000)
     for ins in installations:
         if ins["status"] in ("scheduled", "in_progress") and ins.get("installation_date"):
             try:
@@ -2075,13 +2075,13 @@ async def export_report(kind: str, user: dict = Depends(require_roles("accounts"
         cost_map = {c["project_id"]: c.get("total_cost", 0) for c in costs}
         rows = [{"project_no": p["project_no"], "name": p["name"], "client": p["client_name"], "status": p["status"], "revenue": p.get("contract_value", 0), "cost": cost_map.get(p["id"], 0), "profit": round(p.get("contract_value", 0) - cost_map.get(p["id"], 0), 2)} for p in projects]
     elif kind == "gst":
-        rows = await db.invoices.find({}, {"_id": 0, "items": 0, "payments": 0}).to_list(10000)
+        rows = await db.invoices.find({}, {"_id": 0, "items": 0, "payments": 0}).to_list(2000)
     elif kind == "inventory":
         rows = await _list("materials")
     elif kind == "purchases":
-        rows = await db.purchases.find({}, {"_id": 0}).to_list(10000)
+        rows = await db.purchases.find({}, {"_id": 0}).to_list(2000)
     elif kind == "outstanding":
-        invs = await db.invoices.find({"outstanding": {"$gt": 0}}, {"_id": 0, "items": 0, "payments": 0}).to_list(10000)
+        invs = await db.invoices.find({"outstanding": {"$gt": 0}}, {"_id": 0, "items": 0, "payments": 0}).to_list(2000)
         rows = invs
     elif kind == "clients":
         projects = await _list("projects")
@@ -2137,11 +2137,11 @@ async def list_parties(kind: Optional[str] = None, user: dict = Depends(get_curr
     query = {}
     if kind in ("customer", "supplier", "both"):
         query = {"$or": [{"kind": kind}, {"kind": "both"}]} if kind != "both" else {"kind": kind}
-    parties = await db.parties.find(query, {"_id": 0}).sort("name", 1).to_list(10000)
+    parties = await db.parties.find(query, {"_id": 0}).sort("name", 1).to_list(2000)
 
-    invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
-    payments = await db.vendor_payments.find({}, {"_id": 0}).to_list(10000)
-    purchases = await db.purchases.find({}, {"_id": 0}).to_list(10000)
+    invoices = await db.invoices.find({}, {"_id": 0}).to_list(2000)
+    payments = await db.vendor_payments.find({}, {"_id": 0}).to_list(2000)
+    purchases = await db.purchases.find({}, {"_id": 0}).to_list(2000)
 
     for p in parties:
         # Receivable side (invoices either by party_id or matching name)
@@ -2186,9 +2186,9 @@ async def delete_party(pid: str, user: dict = Depends(require_roles("admin"))):
 @api.get("/parties/{pid}/ledger")
 async def party_ledger(pid: str, user: dict = Depends(get_current_user)):
     party = await _get("parties", pid)
-    invoices = await db.invoices.find({"$or": [{"party_id": pid}, {"client_name": party["name"]}]}, {"_id": 0}).sort("invoice_date", 1).to_list(10000)
-    purchases = await db.purchases.find({"$or": [{"supplier_id": pid}, {"supplier_name": party["name"]}]}, {"_id": 0}).sort("purchase_date", 1).to_list(10000)
-    payments = await db.vendor_payments.find({"$or": [{"supplier_id": pid}, {"supplier_name": party["name"]}]}, {"_id": 0}).sort("created_at", 1).to_list(10000)
+    invoices = await db.invoices.find({"$or": [{"party_id": pid}, {"client_name": party["name"]}]}, {"_id": 0}).sort("invoice_date", 1).to_list(2000)
+    purchases = await db.purchases.find({"$or": [{"supplier_id": pid}, {"supplier_name": party["name"]}]}, {"_id": 0}).sort("purchase_date", 1).to_list(2000)
+    payments = await db.vendor_payments.find({"$or": [{"supplier_id": pid}, {"supplier_name": party["name"]}]}, {"_id": 0}).sort("created_at", 1).to_list(2000)
 
     entries = []
     for i in invoices:
@@ -2265,7 +2265,7 @@ async def list_expenses(category: Optional[str] = None, user: dict = Depends(req
     query = {}
     if category:
         query["category"] = category
-    return await db.expenses.find(query, {"_id": 0}).sort("date", -1).to_list(10000)
+    return await db.expenses.find(query, {"_id": 0}).sort("date", -1).to_list(2000)
 
 
 @api.post("/expenses")
@@ -2321,9 +2321,9 @@ async def list_cash_accounts(user: dict = Depends(require_roles("accounts", "adm
             await db.cash_accounts.insert_one(CashAccount(**d).model_dump())
         accts = await db.cash_accounts.find({}, {"_id": 0}).sort("created_at", 1).to_list(100)
 
-    invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
-    expenses = await db.expenses.find({}, {"_id": 0}).to_list(10000)
-    vendor_payments = await db.vendor_payments.find({}, {"_id": 0}).to_list(10000)
+    invoices = await db.invoices.find({}, {"_id": 0}).to_list(2000)
+    expenses = await db.expenses.find({}, {"_id": 0}).to_list(2000)
+    vendor_payments = await db.vendor_payments.find({}, {"_id": 0}).to_list(2000)
 
     # mode → likely account kind
     MODE_KIND = {"cash": "cash", "upi": "upi", "bank": "bank", "cheque": "bank"}
@@ -2361,10 +2361,10 @@ async def delete_cash_account(aid: str, user: dict = Depends(require_roles("admi
 async def daybook(date: Optional[str] = None, user: dict = Depends(require_roles("accounts", "admin"))):
     target = (date or now_iso()[:10])
 
-    invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
-    expenses = await db.expenses.find({}, {"_id": 0}).to_list(10000)
-    vendor_payments = await db.vendor_payments.find({}, {"_id": 0}).to_list(10000)
-    purchases = await db.purchases.find({}, {"_id": 0}).to_list(10000)
+    invoices = await db.invoices.find({}, {"_id": 0}).to_list(2000)
+    expenses = await db.expenses.find({}, {"_id": 0}).to_list(2000)
+    vendor_payments = await db.vendor_payments.find({}, {"_id": 0}).to_list(2000)
+    purchases = await db.purchases.find({}, {"_id": 0}).to_list(2000)
 
     entries = []
     for inv in invoices:
