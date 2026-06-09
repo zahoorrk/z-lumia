@@ -435,6 +435,7 @@ class Cost(BaseModel):
     transport_cost: float = 0.0
     machine_cost: float = 0.0
     overhead_cost: float = 0.0
+    subcontract_cost: float = 0.0
     total_cost: float = 0.0
     updated_at: str = Field(default_factory=now_iso)
 
@@ -445,6 +446,7 @@ class CostUpdate(BaseModel):
     transport_cost: Optional[float] = None
     machine_cost: Optional[float] = None
     overhead_cost: Optional[float] = None
+    subcontract_cost: Optional[float] = None
 
 
 # ---------- FastAPI app ----------
@@ -1186,7 +1188,7 @@ async def update_cost(project_id: str, data: CostUpdate, user: dict = Depends(re
     new_cost = {**cost, **update}
     new_cost["total_cost"] = round(
         new_cost["material_cost"] + new_cost["labour_cost"] + new_cost["transport_cost"]
-        + new_cost["machine_cost"] + new_cost["overhead_cost"], 2,
+        + new_cost["machine_cost"] + new_cost["overhead_cost"] + new_cost.get("subcontract_cost", 0), 2,
     )
     new_cost["updated_at"] = now_iso()
     await db.costs.update_one({"project_id": project_id}, {"$set": new_cost})
@@ -1356,6 +1358,723 @@ async def on_startup():
     await db.installations.create_index("id", unique=True)
     await seed_users()
     await seed_demo_data()
+
+
+# ============================================================
+# ====================== PHASE 3 MODULES =====================
+# ============================================================
+
+# ---------- Invoices ----------
+class InvoiceItem(BaseModel):
+    description: str
+    qty: float = 1
+    unit_price: float = 0.0
+
+
+class InvoicePayment(BaseModel):
+    id: str = Field(default_factory=gen_id)
+    amount: float
+    mode: str = "bank"  # cash | upi | bank | cheque | credit
+    date: str = Field(default_factory=now_iso)
+    note: Optional[str] = ""
+
+
+class Invoice(BaseModel):
+    id: str = Field(default_factory=gen_id)
+    invoice_no: str
+    invoice_date: str = Field(default_factory=now_iso)
+    project_id: str
+    project_no: Optional[str] = ""
+    project_name: Optional[str] = ""
+    client_name: str
+    client_gstin: Optional[str] = ""
+    client_state: Optional[str] = "Maharashtra"
+    items: List[InvoiceItem] = []
+    subtotal: float = 0.0
+    gst_pct: float = 18.0
+    cgst: float = 0.0
+    sgst: float = 0.0
+    igst: float = 0.0
+    gst_amount: float = 0.0
+    total: float = 0.0
+    advance_received: float = 0.0
+    payments: List[InvoicePayment] = []
+    amount_received: float = 0.0
+    outstanding: float = 0.0
+    status: str = "draft"  # draft | sent | paid | partial | overdue
+    notes: Optional[str] = ""
+    due_date: Optional[str] = None
+    created_at: str = Field(default_factory=now_iso)
+
+
+class InvoiceCreate(BaseModel):
+    project_id: str
+    client_name: str
+    client_gstin: Optional[str] = ""
+    client_state: Optional[str] = "Maharashtra"
+    items: List[InvoiceItem] = []
+    gst_pct: float = 18.0
+    advance_received: float = 0.0
+    notes: Optional[str] = ""
+    due_date: Optional[str] = None
+
+
+class PaymentIn(BaseModel):
+    amount: float
+    mode: str = "bank"
+    date: Optional[str] = None
+    note: Optional[str] = ""
+
+
+def _calc_invoice(items: List[InvoiceItem], gst_pct: float, intra_state: bool):
+    subtotal = round(sum(i.qty * i.unit_price for i in items), 2)
+    gst_amount = round(subtotal * gst_pct / 100, 2)
+    if intra_state:
+        cgst = round(gst_amount / 2, 2)
+        sgst = round(gst_amount - cgst, 2)
+        igst = 0.0
+    else:
+        cgst = 0.0
+        sgst = 0.0
+        igst = gst_amount
+    total = round(subtotal + gst_amount, 2)
+    return subtotal, cgst, sgst, igst, gst_amount, total
+
+
+@api.get("/invoices")
+async def list_invoices(client: Optional[str] = None, status: Optional[str] = None, user: dict = Depends(require_roles("accounts", "sales"))):
+    query = {}
+    if client:
+        query["client_name"] = client
+    if status:
+        query["status"] = status
+    return await db.invoices.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
+
+
+@api.post("/invoices")
+async def create_invoice(data: InvoiceCreate, user: dict = Depends(require_roles("accounts", "sales"))):
+    project = await _get("projects", data.project_id)
+    count = await db.invoices.count_documents({})
+    invoice_no = f"INV-{6000 + count + 1}"
+    company_state = os.environ.get("COMPANY_STATE", "Maharashtra")
+    intra_state = (data.client_state or "").strip().lower() == company_state.strip().lower()
+    subtotal, cgst, sgst, igst, gst_amount, total = _calc_invoice(data.items, data.gst_pct, intra_state)
+    inv = Invoice(
+        invoice_no=invoice_no, project_id=data.project_id,
+        project_no=project["project_no"], project_name=project["name"],
+        client_name=data.client_name, client_gstin=data.client_gstin,
+        client_state=data.client_state, items=data.items,
+        subtotal=subtotal, gst_pct=data.gst_pct, cgst=cgst, sgst=sgst, igst=igst,
+        gst_amount=gst_amount, total=total,
+        advance_received=data.advance_received,
+        amount_received=data.advance_received,
+        outstanding=round(total - data.advance_received, 2),
+        status="partial" if 0 < data.advance_received < total else ("paid" if data.advance_received >= total else "draft"),
+        notes=data.notes, due_date=data.due_date,
+    )
+    await db.invoices.insert_one(inv.model_dump())
+    await log_audit(user, "invoices", f"Created invoice {invoice_no}", inv.id)
+    return inv.model_dump()
+
+
+@api.put("/invoices/{inv_id}")
+async def update_invoice(inv_id: str, data: InvoiceCreate, user: dict = Depends(require_roles("accounts", "sales"))):
+    existing = await _get("invoices", inv_id)
+    if existing["amount_received"] >= existing["total"] and existing["total"] > 0:
+        raise HTTPException(status_code=400, detail="Cannot edit a fully paid invoice")
+    project = await _get("projects", data.project_id)
+    company_state = os.environ.get("COMPANY_STATE", "Maharashtra")
+    intra_state = (data.client_state or "").strip().lower() == company_state.strip().lower()
+    subtotal, cgst, sgst, igst, gst_amount, total = _calc_invoice(data.items, data.gst_pct, intra_state)
+    received = existing.get("amount_received", 0)
+    update = {
+        "project_id": data.project_id, "project_no": project["project_no"], "project_name": project["name"],
+        "client_name": data.client_name, "client_gstin": data.client_gstin, "client_state": data.client_state,
+        "items": [i.model_dump() for i in data.items], "subtotal": subtotal,
+        "gst_pct": data.gst_pct, "cgst": cgst, "sgst": sgst, "igst": igst,
+        "gst_amount": gst_amount, "total": total,
+        "outstanding": round(total - received, 2),
+        "status": "paid" if received >= total else ("partial" if received > 0 else "draft"),
+        "notes": data.notes, "due_date": data.due_date,
+    }
+    await db.invoices.update_one({"id": inv_id}, {"$set": update})
+    await log_audit(user, "invoices", f"Edited invoice {existing['invoice_no']}", inv_id)
+    return await _get("invoices", inv_id)
+
+
+@api.post("/invoices/{inv_id}/payments")
+async def add_payment(inv_id: str, data: PaymentIn, user: dict = Depends(require_roles("accounts"))):
+    inv = await _get("invoices", inv_id)
+    pay = InvoicePayment(amount=data.amount, mode=data.mode, date=data.date or now_iso(), note=data.note).model_dump()
+    payments = inv.get("payments", []) + [pay]
+    new_received = round(sum(p["amount"] for p in payments) + inv.get("advance_received", 0), 2)
+    outstanding = round(inv["total"] - new_received, 2)
+    status = "paid" if outstanding <= 0.01 else ("partial" if new_received > 0 else "draft")
+    await db.invoices.update_one(
+        {"id": inv_id},
+        {"$set": {"payments": payments, "amount_received": new_received, "outstanding": outstanding, "status": status}},
+    )
+    await log_audit(user, "invoices", f"Added payment ₹{data.amount} via {data.mode} to {inv['invoice_no']}", inv_id)
+    return await _get("invoices", inv_id)
+
+
+@api.delete("/invoices/{inv_id}/payments/{pay_id}")
+async def delete_payment(inv_id: str, pay_id: str, user: dict = Depends(require_roles("admin"))):
+    inv = await _get("invoices", inv_id)
+    payments = [p for p in inv.get("payments", []) if p["id"] != pay_id]
+    new_received = round(sum(p["amount"] for p in payments) + inv.get("advance_received", 0), 2)
+    outstanding = round(inv["total"] - new_received, 2)
+    status = "paid" if outstanding <= 0.01 else ("partial" if new_received > 0 else "draft")
+    await db.invoices.update_one(
+        {"id": inv_id},
+        {"$set": {"payments": payments, "amount_received": new_received, "outstanding": outstanding, "status": status}},
+    )
+    await log_audit(user, "invoices", f"Deleted payment from {inv['invoice_no']}", inv_id)
+    return await _get("invoices", inv_id)
+
+
+@api.delete("/invoices/{inv_id}")
+async def delete_invoice(inv_id: str, user: dict = Depends(require_roles("accounts", "admin"))):
+    inv = await _get("invoices", inv_id)
+    await db.invoices.delete_one({"id": inv_id})
+    await log_audit(user, "invoices", f"Deleted invoice {inv['invoice_no']}", inv_id)
+    return {"ok": True}
+
+
+# ---------- GST Reports ----------
+@api.get("/gst/summary")
+async def gst_summary(user: dict = Depends(require_roles("accounts"))):
+    invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
+    purchases = await db.purchases.find({}, {"_id": 0}).to_list(10000)
+    output_subtotal = sum(i["subtotal"] for i in invoices)
+    output_gst = sum(i["gst_amount"] for i in invoices)
+    output_cgst = sum(i.get("cgst", 0) for i in invoices)
+    output_sgst = sum(i.get("sgst", 0) for i in invoices)
+    output_igst = sum(i.get("igst", 0) for i in invoices)
+    input_subtotal = sum(p["subtotal"] for p in purchases if p.get("status") == "received")
+    input_gst = sum(p["gst_amount"] for p in purchases if p.get("status") == "received")
+    return {
+        "output_subtotal": round(output_subtotal, 2), "output_gst": round(output_gst, 2),
+        "output_cgst": round(output_cgst, 2), "output_sgst": round(output_sgst, 2), "output_igst": round(output_igst, 2),
+        "input_subtotal": round(input_subtotal, 2), "input_gst": round(input_gst, 2),
+        "net_payable": round(output_gst - input_gst, 2),
+        "invoice_count": len(invoices), "purchase_count": len([p for p in purchases if p.get("status") == "received"]),
+    }
+
+
+@api.get("/gst/monthly")
+async def gst_monthly(user: dict = Depends(require_roles("accounts"))):
+    invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
+    bucket = {}
+    for i in invoices:
+        try:
+            d = datetime.fromisoformat(i["invoice_date"])
+            key = d.strftime("%b %Y")
+        except Exception:
+            key = "Unknown"
+        b = bucket.setdefault(key, {"month": key, "subtotal": 0, "gst": 0, "cgst": 0, "sgst": 0, "igst": 0, "total": 0, "count": 0})
+        b["subtotal"] += i["subtotal"]; b["gst"] += i["gst_amount"]
+        b["cgst"] += i.get("cgst", 0); b["sgst"] += i.get("sgst", 0); b["igst"] += i.get("igst", 0)
+        b["total"] += i["total"]; b["count"] += 1
+    return list(bucket.values())
+
+
+# ---------- CEO Dashboard ----------
+@api.get("/ceo/dashboard")
+async def ceo_dashboard(user: dict = Depends(require_roles("admin", "accounts"))):
+    projects = await db.projects.find({}, {"_id": 0}).to_list(10000)
+    costs = await db.costs.find({}, {"_id": 0}).to_list(10000)
+    materials = await db.materials.find({}, {"_id": 0}).to_list(10000)
+    invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
+    purchases = await db.purchases.find({}, {"_id": 0}).to_list(10000)
+    installations = await db.installations.find({}, {"_id": 0}).to_list(10000)
+
+    cost_map = {c["project_id"]: c for c in costs}
+    completed = [p for p in projects if p["status"] == "completed"]
+    revenue = sum(p.get("contract_value", 0) for p in completed)
+    total_cost = sum(cost_map.get(p["id"], {}).get("total_cost", 0) for p in completed)
+    profit = revenue - total_cost
+    profit_pct = (profit / revenue * 100) if revenue > 0 else 0
+
+    outstanding = sum(i.get("outstanding", 0) for i in invoices)
+    total_invoiced = sum(i.get("total", 0) for i in invoices)
+    total_collected = sum(i.get("amount_received", 0) for i in invoices)
+    collection_eff = (total_collected / total_invoiced * 100) if total_invoiced > 0 else 0
+
+    inventory_value = sum(m["stock_qty"] * m.get("purchase_rate", 0) for m in materials)
+    outstanding_payable = sum((p.get("total", 0) - p.get("paid_amount", 0)) for p in purchases if p.get("payment_terms") == "credit" and p.get("payment_status") != "paid")
+
+    # Monthly revenue/profit
+    monthly = {}
+    for p in completed:
+        try:
+            d = datetime.fromisoformat(p["created_at"]); key = d.strftime("%b %Y")
+        except Exception:
+            key = "Unknown"
+        b = monthly.setdefault(key, {"month": key, "revenue": 0, "cost": 0, "profit": 0})
+        rev = p.get("contract_value", 0); pcost = cost_map.get(p["id"], {}).get("total_cost", 0)
+        b["revenue"] += rev; b["cost"] += pcost; b["profit"] += (rev - pcost)
+    monthly_list = sorted(monthly.values(), key=lambda x: x["month"])
+
+    # Project profit ranking
+    proj_with_profit = []
+    for p in projects:
+        rev = p.get("contract_value", 0)
+        pcost = cost_map.get(p["id"], {}).get("total_cost", 0)
+        pp = rev - pcost
+        margin = (pp / rev * 100) if rev > 0 else 0
+        proj_with_profit.append({
+            "project_id": p["id"], "project_no": p["project_no"], "name": p["name"],
+            "client_name": p["client_name"], "status": p["status"],
+            "revenue": rev, "cost": pcost, "profit": round(pp, 2), "margin_pct": round(margin, 2),
+        })
+    profitable = sorted([x for x in proj_with_profit if x["revenue"] > 0], key=lambda x: x["profit"], reverse=True)
+    top_profitable = profitable[:10]
+    top_loss = sorted(profitable, key=lambda x: x["profit"])[:10]
+
+    # Client wise
+    by_client = {}
+    for p in proj_with_profit:
+        c = p["client_name"]
+        b = by_client.setdefault(c, {"client_name": c, "revenue": 0, "cost": 0, "profit": 0, "projects": 0})
+        b["revenue"] += p["revenue"]; b["cost"] += p["cost"]; b["profit"] += p["profit"]; b["projects"] += 1
+    clients = list(by_client.values())
+    for c in clients:
+        c["margin_pct"] = round((c["profit"] / c["revenue"] * 100) if c["revenue"] > 0 else 0, 2)
+        c["revenue"] = round(c["revenue"], 2); c["cost"] = round(c["cost"], 2); c["profit"] = round(c["profit"], 2)
+    top_clients = sorted(clients, key=lambda x: x["revenue"], reverse=True)[:5]
+    least_profitable_clients = sorted([c for c in clients if c["revenue"] > 0], key=lambda x: x["margin_pct"])[:5]
+
+    # Growth (compare last 2 buckets)
+    rev_growth = profit_growth = 0
+    if len(monthly_list) >= 2:
+        prev, curr = monthly_list[-2], monthly_list[-1]
+        rev_growth = round(((curr["revenue"] - prev["revenue"]) / prev["revenue"] * 100) if prev["revenue"] else 0, 2)
+        profit_growth = round(((curr["profit"] - prev["profit"]) / abs(prev["profit"]) * 100) if prev["profit"] else 0, 2)
+
+    avg_margin = round(sum(p["margin_pct"] for p in profitable) / len(profitable), 2) if profitable else 0
+
+    # Business health score (0-100)
+    health_score = 0
+    if profit_pct >= 30: health_score += 30
+    elif profit_pct >= 20: health_score += 20
+    elif profit_pct > 0: health_score += 10
+    if collection_eff >= 80: health_score += 25
+    elif collection_eff >= 60: health_score += 15
+    if outstanding < revenue * 0.2: health_score += 20
+    elif outstanding < revenue * 0.4: health_score += 10
+    low_stock = len([m for m in materials if m["stock_qty"] <= m["min_stock"]])
+    if low_stock == 0: health_score += 10
+    elif low_stock <= 3: health_score += 5
+    pending_proj = len([p for p in projects if p["status"] not in ("completed", "cancelled")])
+    if pending_proj > 0: health_score += 15
+    health_score = min(100, health_score)
+
+    return {
+        "revenue": round(revenue, 2), "profit": round(profit, 2), "profit_pct": round(profit_pct, 2),
+        "outstanding": round(outstanding, 2), "inventory_value": round(inventory_value, 2),
+        "outstanding_payable": round(outstanding_payable, 2),
+        "total_invoiced": round(total_invoiced, 2), "total_collected": round(total_collected, 2),
+        "collection_efficiency": round(collection_eff, 2),
+        "pending_projects": pending_proj,
+        "in_production": len([p for p in projects if p["status"] == "in_production"]),
+        "in_installation": len([p for p in projects if p["status"] == "installation"]),
+        "completed_projects": len(completed),
+        "installations_pending": len([i for i in installations if i["status"] in ("scheduled", "in_progress")]),
+        "monthly": monthly_list[-12:],
+        "top_profitable": top_profitable, "top_loss": top_loss,
+        "top_clients": top_clients, "least_profitable_clients": least_profitable_clients,
+        "revenue_growth_pct": rev_growth, "profit_growth_pct": profit_growth,
+        "avg_project_margin_pct": avg_margin,
+        "business_health_score": health_score,
+    }
+
+
+# ---------- Profit Analytics (extended) ----------
+@api.get("/analytics/profit-by-client")
+async def profit_by_client(user: dict = Depends(require_roles("accounts", "admin"))):
+    projects = await db.projects.find({}, {"_id": 0}).to_list(10000)
+    costs = await db.costs.find({}, {"_id": 0}).to_list(10000)
+    cost_map = {c["project_id"]: c for c in costs}
+    bucket = {}
+    for p in projects:
+        c = p["client_name"]
+        b = bucket.setdefault(c, {"client_name": c, "revenue": 0, "cost": 0, "profit": 0, "projects": 0})
+        rev = p.get("contract_value", 0); pcost = cost_map.get(p["id"], {}).get("total_cost", 0)
+        b["revenue"] += rev; b["cost"] += pcost; b["profit"] += (rev - pcost); b["projects"] += 1
+    out = []
+    for b in bucket.values():
+        b["margin_pct"] = round((b["profit"] / b["revenue"] * 100) if b["revenue"] > 0 else 0, 2)
+        for k in ("revenue", "cost", "profit"):
+            b[k] = round(b[k], 2)
+        out.append(b)
+    return sorted(out, key=lambda x: x["revenue"], reverse=True)
+
+
+@api.get("/analytics/profit-by-category")
+async def profit_by_category(user: dict = Depends(require_roles("accounts", "admin"))):
+    # Group projects by inferred category from name keywords
+    keywords = {
+        "ACP Facade": ["acp", "facade"], "LED Signage": ["led", "backlit"],
+        "Acrylic": ["acrylic"], "Pylon": ["pylon"], "Wayfinding": ["wayfinding"],
+        "Retail": ["retail", "storefront"], "Vehicle": ["vehicle"], "Other": [],
+    }
+    projects = await db.projects.find({}, {"_id": 0}).to_list(10000)
+    costs = await db.costs.find({}, {"_id": 0}).to_list(10000)
+    cost_map = {c["project_id"]: c for c in costs}
+    bucket = {}
+    for p in projects:
+        name = (p["name"] + " " + (p.get("description") or "")).lower()
+        cat = "Other"
+        for k, kws in keywords.items():
+            if any(w in name for w in kws):
+                cat = k; break
+        b = bucket.setdefault(cat, {"category": cat, "revenue": 0, "cost": 0, "profit": 0, "count": 0})
+        rev = p.get("contract_value", 0); pcost = cost_map.get(p["id"], {}).get("total_cost", 0)
+        b["revenue"] += rev; b["cost"] += pcost; b["profit"] += (rev - pcost); b["count"] += 1
+    return list(bucket.values())
+
+
+# ---------- Project Health Score ----------
+@api.get("/projects/{project_id}/health")
+async def project_health(project_id: str, user: dict = Depends(get_current_user)):
+    project = await _get("projects", project_id)
+    cost = await db.costs.find_one({"project_id": project_id}, {"_id": 0}) or {}
+    invoices = await db.invoices.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+    jobs = await db.production_jobs.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+
+    rev = project.get("contract_value", 0); tc = cost.get("total_cost", 0)
+    margin = (rev - tc) / rev * 100 if rev > 0 else 0
+
+    if margin >= 30: prof_score, prof_color = 90, "green"
+    elif margin >= 20: prof_score, prof_color = 70, "yellow"
+    elif margin >= 10: prof_score, prof_color = 50, "yellow"
+    else: prof_score, prof_color = 25, "red"
+
+    # Delay risk: based on end_date passed without completion
+    delay_score, delay_color = 90, "green"
+    if project.get("end_date"):
+        try:
+            end = datetime.fromisoformat(project["end_date"])
+            if end < datetime.now(timezone.utc) and project["status"] != "completed":
+                delay_score, delay_color = 25, "red"
+            elif (end - datetime.now(timezone.utc)).days < 7 and project["status"] != "completed":
+                delay_score, delay_color = 50, "yellow"
+        except Exception:
+            pass
+
+    # Material risk: any production stages stalled or stock too low?
+    mat_score, mat_color = 80, "green"
+    materials = await db.materials.find({}, {"_id": 0}).to_list(10000)
+    if any(m["stock_qty"] <= m["min_stock"] for m in materials):
+        mat_score, mat_color = 55, "yellow"
+
+    # Payment risk: high outstanding %
+    pay_score, pay_color = 85, "green"
+    total_inv = sum(i.get("total", 0) for i in invoices)
+    if total_inv > 0:
+        recv = sum(i.get("amount_received", 0) for i in invoices)
+        coll_pct = recv / total_inv * 100
+        if coll_pct < 30: pay_score, pay_color = 25, "red"
+        elif coll_pct < 60: pay_score, pay_color = 55, "yellow"
+
+    overall = round((prof_score + delay_score + mat_score + pay_score) / 4, 1)
+    if overall >= 75: overall_color = "green"
+    elif overall >= 50: overall_color = "yellow"
+    else: overall_color = "red"
+
+    return {
+        "project_id": project_id,
+        "profitability": {"score": prof_score, "color": prof_color, "margin_pct": round(margin, 2)},
+        "delay_risk": {"score": delay_score, "color": delay_color},
+        "material_risk": {"score": mat_score, "color": mat_color},
+        "payment_risk": {"score": pay_score, "color": pay_color},
+        "overall_score": overall, "overall_color": overall_color,
+    }
+
+
+# ---------- AI Cost Estimator ----------
+class CostEstimateIn(BaseModel):
+    project_type: str
+    project_size: str  # e.g. "10x4 ft"
+    material_type: Optional[str] = ""
+    lighting_type: Optional[str] = ""
+    location: Optional[str] = ""
+    extra_notes: Optional[str] = ""
+
+
+@api.post("/ai/cost-estimate")
+async def ai_cost_estimate(data: CostEstimateIn, user: dict = Depends(require_roles("sales", "accounts", "admin"))):
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        import json as _json
+
+        key = os.environ.get("EMERGENT_LLM_KEY")
+        if not key:
+            raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY not configured")
+
+        sys_msg = (
+            "You are an expert cost estimator for signage manufacturing in India. "
+            "Given a signage project spec, return realistic INR cost estimates for a production-grade signage company. "
+            "Material rates: ACP ₹95-160/sqft, Acrylic ₹140-260/sqft, SS304 ₹320-420/sqft, MS Pipe ₹70-100/mtr, LED ₹15-30/pc, SMPS ₹500-800/pc. "
+            "Labour is typically 20-30% of material. Transport 5-10%. Overhead 8-12%. Aim for 25-40% margin on selling price. "
+            "RESPOND ONLY with a strict JSON object (no markdown, no prose) with keys: "
+            "material_cost, labour_cost, transport_cost, overhead_cost, total_cost, selling_price, profit, profit_pct, breakdown (string), assumptions (string)."
+        )
+        chat = LlmChat(
+            api_key=key,
+            session_id=f"cost-est-{gen_id()}",
+            system_message=sys_msg,
+        ).with_model("gemini", "gemini-2.5-flash")
+
+        prompt = (
+            f"Project Type: {data.project_type}\n"
+            f"Size: {data.project_size}\n"
+            f"Material: {data.material_type or 'best fit'}\n"
+            f"Lighting: {data.lighting_type or 'none'}\n"
+            f"Location: {data.location or 'Mumbai'}\n"
+            f"Notes: {data.extra_notes or '—'}\n\n"
+            "Return JSON only."
+        )
+
+        resp = await chat.send_message(UserMessage(text=prompt))
+        text = resp if isinstance(resp, str) else str(resp)
+        # Best-effort JSON extraction
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.strip("`").lstrip("json").strip()
+        # Find first { and last }
+        s, e = text.find("{"), text.rfind("}")
+        if s >= 0 and e > s:
+            text = text[s:e+1]
+        try:
+            estimate = _json.loads(text)
+        except Exception:
+            estimate = {"raw": text, "error": "Could not parse JSON from model"}
+
+        await log_audit(user, "ai", f"Cost estimate for {data.project_type} {data.project_size}", None)
+        return {"input": data.model_dump(), "estimate": estimate}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI estimation failed: {str(e)}")
+
+
+# ---------- WhatsApp / Email helpers (deep links — no API key needed) ----------
+import urllib.parse as _up
+
+
+@api.get("/messaging/whatsapp-link")
+async def whatsapp_link(phone: str, template: str, project_id: Optional[str] = None, invoice_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+    text = await _render_template(template, project_id, invoice_id)
+    clean = "".join(ch for ch in phone if ch.isdigit())
+    return {"link": f"https://wa.me/{clean}?text={_up.quote(text)}", "text": text}
+
+
+@api.get("/messaging/email-link")
+async def email_link(to: str, template: str, project_id: Optional[str] = None, invoice_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+    text = await _render_template(template, project_id, invoice_id)
+    subject = {
+        "quotation_ready": "Quotation from LUMIASIGN LLP",
+        "invoice_generated": "Invoice from LUMIASIGN LLP",
+        "payment_pending": "Payment Reminder — LUMIASIGN LLP",
+        "project_completed": "Project Completed — LUMIASIGN LLP",
+        "installation_scheduled": "Installation Scheduled — LUMIASIGN LLP",
+    }.get(template, "Message from LUMIASIGN LLP")
+    return {"link": f"mailto:{to}?subject={_up.quote(subject)}&body={_up.quote(text)}", "text": text, "subject": subject}
+
+
+async def _render_template(template: str, project_id: Optional[str], invoice_id: Optional[str]) -> str:
+    company = os.environ.get("COMPANY_NAME", "LUMIASIGN LLP")
+    project = None
+    if project_id:
+        try: project = await _get("projects", project_id)
+        except Exception: project = None
+    invoice = None
+    if invoice_id:
+        try: invoice = await _get("invoices", invoice_id)
+        except Exception: invoice = None
+
+    if template == "quotation_ready" and project:
+        return f"Hello {project['client_name']}, your quotation for *{project['name']}* (₹{project.get('contract_value', 0):,.0f}) is ready. — {company}"
+    if template == "invoice_generated" and invoice:
+        return f"Hello {invoice['client_name']}, your invoice {invoice['invoice_no']} for ₹{invoice['total']:,.0f} has been generated. Payment due: ₹{invoice['outstanding']:,.0f}. — {company}"
+    if template == "payment_pending" and invoice:
+        return f"Hello {invoice['client_name']}, this is a gentle reminder. Invoice {invoice['invoice_no']} has ₹{invoice['outstanding']:,.0f} outstanding. — {company}"
+    if template == "project_completed" and project:
+        return f"Hello {project['client_name']}, your project *{project['name']}* has been completed. Thank you for choosing us. — {company}"
+    if template == "installation_scheduled" and project:
+        return f"Hello {project['client_name']}, our team will install *{project['name']}* shortly. We will share photos and a completion report. — {company}"
+    return f"Hello, this is a message from {company}."
+
+
+# ---------- Notifications ----------
+@api.get("/notifications")
+async def list_notifications(user: dict = Depends(get_current_user)):
+    notes = []
+    materials = await db.materials.find({}, {"_id": 0}).to_list(10000)
+    for m in materials:
+        if m["stock_qty"] <= m["min_stock"]:
+            notes.append({"kind": "low_stock", "severity": "high", "title": f"Low stock: {m['name']}", "message": f"{m['stock_qty']} {m['unit']} (min {m['min_stock']})", "ref_id": m["id"]})
+
+    invoices = await db.invoices.find({}, {"_id": 0}).to_list(10000)
+    today = datetime.now(timezone.utc)
+    for inv in invoices:
+        if inv.get("outstanding", 0) > 0 and inv.get("due_date"):
+            try:
+                due = datetime.fromisoformat(inv["due_date"])
+                if due < today:
+                    notes.append({"kind": "payment_overdue", "severity": "high", "title": f"Overdue: {inv['invoice_no']}", "message": f"₹{inv['outstanding']:,.0f} from {inv['client_name']}", "ref_id": inv["id"]})
+            except Exception:
+                pass
+
+    projects = await db.projects.find({}, {"_id": 0}).to_list(10000)
+    for p in projects:
+        if p.get("end_date") and p["status"] not in ("completed", "cancelled"):
+            try:
+                end = datetime.fromisoformat(p["end_date"])
+                if end < today:
+                    notes.append({"kind": "project_delay", "severity": "medium", "title": f"Delayed: {p['project_no']}", "message": f"{p['name']} past end date", "ref_id": p["id"]})
+            except Exception:
+                pass
+
+    installations = await db.installations.find({}, {"_id": 0}).to_list(10000)
+    for ins in installations:
+        if ins["status"] in ("scheduled", "in_progress") and ins.get("installation_date"):
+            try:
+                idate = datetime.fromisoformat(ins["installation_date"])
+                days = (idate - today).days
+                if 0 <= days <= 2:
+                    notes.append({"kind": "install_due", "severity": "medium", "title": f"Install due: {ins['install_no']}", "message": f"{ins['project_name']} in {days} day(s)", "ref_id": ins["id"]})
+            except Exception:
+                pass
+
+    return notes
+
+
+# ---------- Audit Log ----------
+class AuditEntry(BaseModel):
+    id: str = Field(default_factory=gen_id)
+    user_id: str
+    user_name: str
+    user_role: str
+    module: str
+    action: str
+    ref_id: Optional[str] = None
+    created_at: str = Field(default_factory=now_iso)
+
+
+async def log_audit(user: dict, module: str, action: str, ref_id: Optional[str] = None):
+    try:
+        entry = AuditEntry(
+            user_id=user.get("id", ""), user_name=user.get("name", ""), user_role=user.get("role", ""),
+            module=module, action=action, ref_id=ref_id,
+        )
+        await db.audit_log.insert_one(entry.model_dump())
+    except Exception:
+        pass
+
+
+@api.get("/audit-log")
+async def get_audit_log(limit: int = 200, module: Optional[str] = None, user: dict = Depends(require_roles("admin"))):
+    query = {}
+    if module:
+        query["module"] = module
+    return await db.audit_log.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
+
+
+# ---------- Documents ----------
+class DocumentLink(BaseModel):
+    id: str = Field(default_factory=gen_id)
+    title: str
+    kind: str  # quotation | invoice | design | approval | completion | po | installation_photo | other
+    project_id: Optional[str] = None
+    ref_id: Optional[str] = None  # e.g. invoice id / po id
+    url: Optional[str] = None  # external link or data URL
+    note: Optional[str] = ""
+    uploaded_by: Optional[str] = ""
+    created_at: str = Field(default_factory=now_iso)
+
+
+class DocumentCreate(BaseModel):
+    title: str
+    kind: str
+    project_id: Optional[str] = None
+    ref_id: Optional[str] = None
+    url: Optional[str] = None
+    note: Optional[str] = ""
+
+
+@api.get("/documents")
+async def list_documents(project_id: Optional[str] = None, kind: Optional[str] = None, user: dict = Depends(get_current_user)):
+    query = {}
+    if project_id:
+        query["project_id"] = project_id
+    if kind:
+        query["kind"] = kind
+    return await db.documents.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
+
+
+@api.post("/documents")
+async def add_document(data: DocumentCreate, user: dict = Depends(get_current_user)):
+    doc = DocumentLink(**data.model_dump(), uploaded_by=user.get("name", ""))
+    await db.documents.insert_one(doc.model_dump())
+    await log_audit(user, "documents", f"Added document {doc.title}", doc.id)
+    return doc.model_dump()
+
+
+@api.delete("/documents/{doc_id}")
+async def delete_document(doc_id: str, user: dict = Depends(get_current_user)):
+    doc = await _get("documents", doc_id)
+    await db.documents.delete_one({"id": doc_id})
+    await log_audit(user, "documents", f"Removed document {doc['title']}", doc_id)
+    return {"ok": True}
+
+
+# ---------- Advanced Reports (CSV) ----------
+from fastapi.responses import PlainTextResponse
+
+
+def _csv(rows: List[dict]) -> str:
+    if not rows:
+        return ""
+    headers = list(rows[0].keys())
+    out = [",".join(headers)]
+    for r in rows:
+        out.append(",".join('"' + str(r.get(h, "")).replace('"', '""') + '"' for h in headers))
+    return "\n".join(out)
+
+
+@api.get("/reports/export", response_class=PlainTextResponse)
+async def export_report(kind: str, user: dict = Depends(require_roles("accounts", "admin"))):
+    if kind == "revenue":
+        projects = await _list("projects")
+        costs = await _list("costs")
+        cost_map = {c["project_id"]: c.get("total_cost", 0) for c in costs}
+        rows = [{"project_no": p["project_no"], "name": p["name"], "client": p["client_name"], "status": p["status"], "revenue": p.get("contract_value", 0), "cost": cost_map.get(p["id"], 0), "profit": round(p.get("contract_value", 0) - cost_map.get(p["id"], 0), 2)} for p in projects]
+    elif kind == "gst":
+        rows = await db.invoices.find({}, {"_id": 0, "items": 0, "payments": 0}).to_list(10000)
+    elif kind == "inventory":
+        rows = await _list("materials")
+    elif kind == "purchases":
+        rows = await db.purchases.find({}, {"_id": 0}).to_list(10000)
+    elif kind == "outstanding":
+        invs = await db.invoices.find({"outstanding": {"$gt": 0}}, {"_id": 0, "items": 0, "payments": 0}).to_list(10000)
+        rows = invs
+    elif kind == "clients":
+        projects = await _list("projects")
+        costs = await _list("costs")
+        cost_map = {c["project_id"]: c.get("total_cost", 0) for c in costs}
+        bucket = {}
+        for p in projects:
+            c = p["client_name"]
+            b = bucket.setdefault(c, {"client_name": c, "revenue": 0, "cost": 0, "profit": 0, "projects": 0})
+            rev = p.get("contract_value", 0); pcost = cost_map.get(p["id"], 0)
+            b["revenue"] += rev; b["cost"] += pcost; b["profit"] += (rev - pcost); b["projects"] += 1
+        rows = list(bucket.values())
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown report kind: {kind}")
+    return _csv(rows)
 
 
 app.include_router(api)

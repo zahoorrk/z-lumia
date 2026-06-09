@@ -1,0 +1,48 @@
+{
+  "summary": "Phase 3 LUMIASIGN ERP backend testing completed. All 28 pytest tests passed (100%) covering Invoices (CRUD + GST CGST/SGST/IGST intra/inter-state split + partial/full payments + admin-only payment reversal + fully-paid edit guard), GST summary + monthly buckets, CEO Dashboard with full key surface + RBAC, Profit Analytics (by-client sorted desc + by-category), Project Health (4 risk dimensions + overall colour), AI Cost Estimator (Emergent LLM Gemini-2.5-flash returned parsed JSON estimate + RBAC blocks production), WhatsApp/Email deep-link templates, Notifications (low_stock seed surfaced), Audit Log (admin-only + invoice entries created from earlier tests), Documents CRUD + filter, all 6 CSV report kinds + 400 on unknown, and subcontract_cost rollup into Cost.total_cost.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/notifications", "issue": "Returned to ANY authenticated user including 'sales' / 'store' — fine per spec, but no role filter (e.g. payment_overdue surfaced to non-accounts roles). Consider role-scoped filtering."},
+      {"endpoint": "POST /api/invoices", "issue": "invoice_no uses count_documents() — same concurrency hazard as PO/JOB/INS noted in Phase 2. Two concurrent creates can produce duplicate INV-6XXX numbers."},
+      {"endpoint": "POST /api/invoices/{id}/payments", "issue": "Payment 'mode' is a free-form string; no enum validation — 'foo' would be accepted. Spec lists cash/upi/bank/cheque/credit, so a Literal/Enum validator would prevent garbage."},
+      {"endpoint": "PUT /api/invoices/{id}", "issue": "Fully-paid guard uses 'amount_received >= total' but the create-path can set status='paid' with advance_received >= total even if items array is empty (total=0 and advance>=0 path). Edge case only — guard skipped because total==0."},
+      {"endpoint": "POST /api/ai/cost-estimate", "issue": "Catches all exceptions and returns 500 with raw str(e) including upstream provider details — minor info-leak risk. Consider sanitising the message."},
+      {"endpoint": "GET /api/reports/export", "issue": "Sets MIME via PlainTextResponse (text/plain) but CSV idiomatic type is text/csv. Also no Content-Disposition header, so browser shows the CSV inline rather than downloading. Tests still pass."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_phase3_lumiasign.py",
+    "/app/backend/tests/test_phase2_lumiasign.py",
+    "/app/test_reports/pytest/phase3_results.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: harden mode field in PaymentIn with Literal['cash','upi','bank','cheque','credit'] for input validation.",
+    "OPTIONAL: switch invoice/PO/JOB/INS numbering to an atomic counters collection (or unique index + retry) to avoid duplicate sequence numbers under concurrency.",
+    "OPTIONAL: scope GET /api/notifications by role so e.g. only accounts/admin see payment_overdue and store sees low_stock.",
+    "OPTIONAL: sanitise AI estimator error responses and add Content-Disposition: attachment + text/csv MIME for /api/reports/export."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 2097 lines — Phase 3 added ~700 lines after the PHASE 3 marker. Strongly recommend splitting into routers/{invoices,gst,ceo,analytics,health,ai,messaging,notifications,audit,documents,reports}.py before any further phase.",
+    "InvoicePayment.mode is plain str with no Literal/Enum validation — accepts arbitrary values; tighten in Pydantic model.",
+    "Invoice numbering uses count_documents() — race-condition prone (same issue flagged in Phase 2 for PO/JOB/INS).",
+    "GET /api/notifications has no role filter; payment_overdue + project_delay are visible to roles that shouldn't see finance/PM signals.",
+    "/api/reports/export uses PlainTextResponse with MIME text/plain instead of text/csv and lacks Content-Disposition: attachment header.",
+    "AI estimator wraps all Exceptions and surfaces str(e) in HTTP 500 detail — possible info leak from upstream provider.",
+    "log_audit swallows every exception silently (try/except: pass) — silent audit drops are dangerous for an admin-only audit trail. Log at minimum.",
+    "Documents endpoints accept arbitrary 'url' strings — no validation; data URLs could blow past Mongo 16MB doc cap.",
+    "Project Health 'material_risk' uses a single global low-stock check (not project-bound BOM) — same score for every project once any material is low.",
+    "Business health score in CEO dashboard adds 15 points unconditionally if pending_projects>0 — that's not a 'health' positive; review weighting."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase3_lumiasign.py"
+  ],
+  "success_rate": {"backend": "100% (28/28)", "frontend": "not tested (skipped per request)"},
+  "test_credentials": "Used /app/memory/test_credentials.md — admin@lumiasign.com/admin123 + 5 role accounts with lumia123. All 6 roles authenticate and JWT carries correct role; RBAC verified for invoices, payments delete (admin-only), CEO dashboard (admin/accounts), AI estimator (sales/accounts/admin), audit-log (admin-only).",
+  "seed_data_creation": "No new seed; reused Phase 2 seed (5 projects, 10 materials w/ 3 low-stock, 4 suppliers, 4 leads). Tests create TEST_-prefixed invoices/documents and cleanup invoices on session teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 3 backend is fully functional. Canonical regression suites: /app/backend/tests/test_phase2_lumiasign.py (18 tests, Phase 2) and /app/backend/tests/test_phase3_lumiasign.py (28 tests, Phase 3, ~26s incl. ~3s real Emergent LLM call). Phase 1 file (test_lumiasign_erp.py) still has stale field-name assertions from before Phase 2 rename — replace before re-running. Verified business rules: INV-6XXX numbering, intra-state Maharashtra→Maharashtra splits GST equally into CGST+SGST with IGST=0, inter-state gives full IGST, advance_received seeds amount_received, payments append + recompute outstanding/status, fully-paid invoice edit returns 400, admin-only payment delete returns 403 for accounts, GST net_payable=output_gst-input_gst (input from received POs only), CEO dashboard exposes all 23 expected keys with bounded list sizes and 0-100 health score, project health colours green≥30 / yellow 20-30 / red<20 margin %, AI estimator parsed estimate JSON returned with material_cost/labour_cost/transport_cost/overhead_cost/total_cost/selling_price/profit/profit_pct (raw fallback also accepted), wa.me URL uses digits-only number with text containing invoice_no + outstanding, mailto link starts with mailto:foo@bar.com? and includes subject 'Quotation from LUMIASIGN LLP', notifications include low_stock kind, audit-log captures invoice creations/edits, documents CRUD round-trips, all 6 CSV kinds return text/plain (note: not text/csv) + bogus kind returns 400, subcontract_cost is added into total_cost. Subcontract field also exposed in Cost + CostUpdate models. Phase 2 tests not re-run this iteration — they were green last iteration and Phase 3 only appended endpoints.",
+  "rca of the issue": "No issues found requiring RCA. All assertions passed first run."
+}
