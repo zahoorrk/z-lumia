@@ -1595,9 +1595,13 @@ async def gst_monthly(user: dict = Depends(require_roles("accounts"))):
         except Exception:
             key = "Unknown"
         b = bucket.setdefault(key, {"month": key, "subtotal": 0, "gst": 0, "cgst": 0, "sgst": 0, "igst": 0, "total": 0, "count": 0})
-        b["subtotal"] += i["subtotal"]; b["gst"] += i["gst_amount"]
-        b["cgst"] += i.get("cgst", 0); b["sgst"] += i.get("sgst", 0); b["igst"] += i.get("igst", 0)
-        b["total"] += i["total"]; b["count"] += 1
+        b["subtotal"] += i["subtotal"]
+        b["gst"] += i["gst_amount"]
+        b["cgst"] += i.get("cgst", 0)
+        b["sgst"] += i.get("sgst", 0)
+        b["igst"] += i.get("igst", 0)
+        b["total"] += i["total"]
+        b["count"] += 1
     return list(bucket.values())
 
 
@@ -1630,12 +1634,16 @@ async def ceo_dashboard(user: dict = Depends(require_roles("admin", "accounts"))
     monthly = {}
     for p in completed:
         try:
-            d = datetime.fromisoformat(p["created_at"]); key = d.strftime("%b %Y")
+            d = datetime.fromisoformat(p["created_at"])
+            key = d.strftime("%b %Y")
         except Exception:
             key = "Unknown"
         b = monthly.setdefault(key, {"month": key, "revenue": 0, "cost": 0, "profit": 0})
-        rev = p.get("contract_value", 0); pcost = cost_map.get(p["id"], {}).get("total_cost", 0)
-        b["revenue"] += rev; b["cost"] += pcost; b["profit"] += (rev - pcost)
+        rev = p.get("contract_value", 0)
+        pcost = cost_map.get(p["id"], {}).get("total_cost", 0)
+        b["revenue"] += rev
+        b["cost"] += pcost
+        b["profit"] += (rev - pcost)
     monthly_list = sorted(monthly.values(), key=lambda x: x["month"])
 
     # Project profit ranking
@@ -1659,11 +1667,16 @@ async def ceo_dashboard(user: dict = Depends(require_roles("admin", "accounts"))
     for p in proj_with_profit:
         c = p["client_name"]
         b = by_client.setdefault(c, {"client_name": c, "revenue": 0, "cost": 0, "profit": 0, "projects": 0})
-        b["revenue"] += p["revenue"]; b["cost"] += p["cost"]; b["profit"] += p["profit"]; b["projects"] += 1
+        b["revenue"] += p["revenue"]
+        b["cost"] += p["cost"]
+        b["profit"] += p["profit"]
+        b["projects"] += 1
     clients = list(by_client.values())
     for c in clients:
         c["margin_pct"] = round((c["profit"] / c["revenue"] * 100) if c["revenue"] > 0 else 0, 2)
-        c["revenue"] = round(c["revenue"], 2); c["cost"] = round(c["cost"], 2); c["profit"] = round(c["profit"], 2)
+        c["revenue"] = round(c["revenue"], 2)
+        c["cost"] = round(c["cost"], 2)
+        c["profit"] = round(c["profit"], 2)
     top_clients = sorted(clients, key=lambda x: x["revenue"], reverse=True)[:5]
     least_profitable_clients = sorted([c for c in clients if c["revenue"] > 0], key=lambda x: x["margin_pct"])[:5]
 
@@ -1678,18 +1691,28 @@ async def ceo_dashboard(user: dict = Depends(require_roles("admin", "accounts"))
 
     # Business health score (0-100)
     health_score = 0
-    if profit_pct >= 30: health_score += 30
-    elif profit_pct >= 20: health_score += 20
-    elif profit_pct > 0: health_score += 10
-    if collection_eff >= 80: health_score += 25
-    elif collection_eff >= 60: health_score += 15
-    if outstanding < revenue * 0.2: health_score += 20
-    elif outstanding < revenue * 0.4: health_score += 10
+    if profit_pct >= 30:
+        health_score += 30
+    elif profit_pct >= 20:
+        health_score += 20
+    elif profit_pct > 0:
+        health_score += 10
+    if collection_eff >= 80:
+        health_score += 25
+    elif collection_eff >= 60:
+        health_score += 15
+    if outstanding < revenue * 0.2:
+        health_score += 20
+    elif outstanding < revenue * 0.4:
+        health_score += 10
     low_stock = len([m for m in materials if m["stock_qty"] <= m["min_stock"]])
-    if low_stock == 0: health_score += 10
-    elif low_stock <= 3: health_score += 5
+    if low_stock == 0:
+        health_score += 10
+    elif low_stock <= 3:
+        health_score += 5
     pending_proj = len([p for p in projects if p["status"] not in ("completed", "cancelled")])
-    if pending_proj > 0: health_score += 15
+    if pending_proj > 0:
+        health_score += 15
     health_score = min(100, health_score)
 
     return {
@@ -1699,10 +1722,10 @@ async def ceo_dashboard(user: dict = Depends(require_roles("admin", "accounts"))
         "total_invoiced": round(total_invoiced, 2), "total_collected": round(total_collected, 2),
         "collection_efficiency": round(collection_eff, 2),
         "pending_projects": pending_proj,
-        "in_production": len([p for p in projects if p["status"] == "in_production"]),
-        "in_installation": len([p for p in projects if p["status"] == "installation"]),
+        "in_production": len([proj for proj in projects if proj["status"] == "in_production"]),
+        "in_installation": len([proj for proj in projects if proj["status"] == "installation"]),
         "completed_projects": len(completed),
-        "installations_pending": len([i for i in installations if i["status"] in ("scheduled", "in_progress")]),
+        "installations_pending": len([ins for ins in installations if ins["status"] in ("scheduled", "in_progress")]),
         "monthly": monthly_list[-12:],
         "top_profitable": top_profitable, "top_loss": top_loss,
         "top_clients": top_clients, "least_profitable_clients": least_profitable_clients,
@@ -1722,8 +1745,12 @@ async def profit_by_client(user: dict = Depends(require_roles("accounts", "admin
     for p in projects:
         c = p["client_name"]
         b = bucket.setdefault(c, {"client_name": c, "revenue": 0, "cost": 0, "profit": 0, "projects": 0})
-        rev = p.get("contract_value", 0); pcost = cost_map.get(p["id"], {}).get("total_cost", 0)
-        b["revenue"] += rev; b["cost"] += pcost; b["profit"] += (rev - pcost); b["projects"] += 1
+        rev = p.get("contract_value", 0)
+        pcost = cost_map.get(p["id"], {}).get("total_cost", 0)
+        b["revenue"] += rev
+        b["cost"] += pcost
+        b["profit"] += (rev - pcost)
+        b["projects"] += 1
     out = []
     for b in bucket.values():
         b["margin_pct"] = round((b["profit"] / b["revenue"] * 100) if b["revenue"] > 0 else 0, 2)
@@ -1750,10 +1777,15 @@ async def profit_by_category(user: dict = Depends(require_roles("accounts", "adm
         cat = "Other"
         for k, kws in keywords.items():
             if any(w in name for w in kws):
-                cat = k; break
+                cat = k
+                break
         b = bucket.setdefault(cat, {"category": cat, "revenue": 0, "cost": 0, "profit": 0, "count": 0})
-        rev = p.get("contract_value", 0); pcost = cost_map.get(p["id"], {}).get("total_cost", 0)
-        b["revenue"] += rev; b["cost"] += pcost; b["profit"] += (rev - pcost); b["count"] += 1
+        rev = p.get("contract_value", 0)
+        pcost = cost_map.get(p["id"], {}).get("total_cost", 0)
+        b["revenue"] += rev
+        b["cost"] += pcost
+        b["profit"] += (rev - pcost)
+        b["count"] += 1
     return list(bucket.values())
 
 
@@ -1763,15 +1795,19 @@ async def project_health(project_id: str, user: dict = Depends(get_current_user)
     project = await _get("projects", project_id)
     cost = await db.costs.find_one({"project_id": project_id}, {"_id": 0}) or {}
     invoices = await db.invoices.find({"project_id": project_id}, {"_id": 0}).to_list(100)
-    jobs = await db.production_jobs.find({"project_id": project_id}, {"_id": 0}).to_list(100)
 
-    rev = project.get("contract_value", 0); tc = cost.get("total_cost", 0)
+    rev = project.get("contract_value", 0)
+    tc = cost.get("total_cost", 0)
     margin = (rev - tc) / rev * 100 if rev > 0 else 0
 
-    if margin >= 30: prof_score, prof_color = 90, "green"
-    elif margin >= 20: prof_score, prof_color = 70, "yellow"
-    elif margin >= 10: prof_score, prof_color = 50, "yellow"
-    else: prof_score, prof_color = 25, "red"
+    # default initializations so linters & all code paths are safe
+    prof_score, prof_color = 25, "red"
+    if margin >= 30:
+        prof_score, prof_color = 90, "green"
+    elif margin >= 20:
+        prof_score, prof_color = 70, "yellow"
+    elif margin >= 10:
+        prof_score, prof_color = 50, "yellow"
 
     # Delay risk: based on end_date passed without completion
     delay_score, delay_color = 90, "green"
@@ -1797,13 +1833,18 @@ async def project_health(project_id: str, user: dict = Depends(get_current_user)
     if total_inv > 0:
         recv = sum(i.get("amount_received", 0) for i in invoices)
         coll_pct = recv / total_inv * 100
-        if coll_pct < 30: pay_score, pay_color = 25, "red"
-        elif coll_pct < 60: pay_score, pay_color = 55, "yellow"
+        if coll_pct < 30:
+            pay_score, pay_color = 25, "red"
+        elif coll_pct < 60:
+            pay_score, pay_color = 55, "yellow"
 
     overall = round((prof_score + delay_score + mat_score + pay_score) / 4, 1)
-    if overall >= 75: overall_color = "green"
-    elif overall >= 50: overall_color = "yellow"
-    else: overall_color = "red"
+    if overall >= 75:
+        overall_color = "green"
+    elif overall >= 50:
+        overall_color = "yellow"
+    else:
+        overall_color = "red"
 
     return {
         "project_id": project_id,
@@ -2069,6 +2110,7 @@ def _csv(rows: List[dict]) -> str:
 
 @api.get("/reports/export", response_class=PlainTextResponse)
 async def export_report(kind: str, user: dict = Depends(require_roles("accounts", "admin"))):
+    rows: List[dict] = []
     if kind == "revenue":
         projects = await _list("projects")
         costs = await _list("costs")
@@ -2091,8 +2133,12 @@ async def export_report(kind: str, user: dict = Depends(require_roles("accounts"
         for p in projects:
             c = p["client_name"]
             b = bucket.setdefault(c, {"client_name": c, "revenue": 0, "cost": 0, "profit": 0, "projects": 0})
-            rev = p.get("contract_value", 0); pcost = cost_map.get(p["id"], 0)
-            b["revenue"] += rev; b["cost"] += pcost; b["profit"] += (rev - pcost); b["projects"] += 1
+            rev = p.get("contract_value", 0)
+            pcost = cost_map.get(p["id"], 0)
+            b["revenue"] += rev
+            b["cost"] += pcost
+            b["profit"] += (rev - pcost)
+            b["projects"] += 1
         rows = list(bucket.values())
     else:
         raise HTTPException(status_code=400, detail=f"Unknown report kind: {kind}")
@@ -2204,17 +2250,17 @@ async def party_ledger(pid: str, user: dict = Depends(get_current_user)):
 
     entries.sort(key=lambda x: x["date"])
     running = party.get("opening_balance", 0)
-    for e in entries:
-        running += e["debit"] - e["credit"]
-        e["running_balance"] = round(running, 2)
+    for entry in entries:
+        running += entry["debit"] - entry["credit"]
+        entry["running_balance"] = round(running, 2)
 
     return {
         "party": party,
         "entries": entries,
         "opening_balance": party.get("opening_balance", 0),
         "closing_balance": round(running, 2),
-        "total_debit": round(sum(e["debit"] for e in entries), 2),
-        "total_credit": round(sum(e["credit"] for e in entries), 2),
+        "total_debit": round(sum(entry["debit"] for entry in entries), 2),
+        "total_credit": round(sum(entry["credit"] for entry in entries), 2),
     }
 
 
@@ -2374,7 +2420,7 @@ async def daybook(date: Optional[str] = None, user: dict = Depends(require_roles
         for p in inv.get("payments", []):
             pdate = (p.get("date") or "")[:10]
             if pdate == target:
-                entries.append({"time": p.get("date", ""), "kind": "receipt", "ref": inv["invoice_no"], "party": inv["client_name"], "desc": f"Receipt", "in": p["amount"], "out": 0, "mode": p.get("mode", "")})
+                entries.append({"time": p.get("date", ""), "kind": "receipt", "ref": inv["invoice_no"], "party": inv["client_name"], "desc": "Receipt", "in": p["amount"], "out": 0, "mode": p.get("mode", "")})
     for e in expenses:
         if (e.get("date") or "")[:10] == target:
             entries.append({"time": e["date"], "kind": "expense", "ref": e["expense_no"], "party": e.get("payee") or "", "desc": e["category"], "in": 0, "out": e["total"], "mode": e.get("mode", "")})
@@ -2408,3 +2454,4 @@ logger = logging.getLogger(__name__)
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+e()
