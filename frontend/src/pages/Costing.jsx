@@ -24,6 +24,8 @@ export default function Costing() {
     setProjects(p.data); setCosts(c.data);
     if (!selected && p.data.length > 0) setSelected(p.data[0].id);
   };
+  // load is intentionally created with component state; run the initial fetch once.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, []);
 
   useEffect(() => {
