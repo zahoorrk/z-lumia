@@ -1,6 +1,8 @@
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+// Use Vercel's same-origin /api route by default. A separate backend URL
+// can still be supplied for local development or another deployment.
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "";
 export const API = `${BACKEND_URL}/api`;
 
 const api = axios.create({ baseURL: API });
