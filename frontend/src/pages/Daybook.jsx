@@ -25,7 +25,9 @@ export default function Daybook() {
     api.get("/daybook", { params: { date } }).then((r) => setData(r.data));
     api.get("/cash-accounts").then((r) => setAccts(r.data));
   };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [date]);
+  // load is intentionally recreated from component state; refresh when the date changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [date]);
 
   const shift = (delta) => {
     const d = new Date(date);
