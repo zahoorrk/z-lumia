@@ -6,8 +6,8 @@
     "@hookform/resolvers": "5.0.1",
     "@phosphor-icons/react": "^2.1.10",
     "@radix-ui/react-accordion": "1.2.8",
-    "@radix-ui/react-alert-dialog": "1.2.8",
-    "@radix-ui/react-aspect-ratio": "1.2.0",
+    "@radix-ui/react-alert-dialog": "1.1.23",
+    "@radix-ui/react-aspect-ratio": "1.1.15",
     "@radix-ui/react-avatar": "1.1.12",
     "@radix-ui/react-checkbox": "1.2.3",
     "@radix-ui/react-collapsible": "1.2.3",
@@ -68,16 +68,8 @@
     "test": "craco test"
   },
   "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
+    "production": [">0.2%", "not dead", "not op_mini all"],
+    "development": ["last 1 chrome version", "last 1 firefox version", "last 1 safari version"]
   },
   "devDependencies": {
     "@babel/plugin-proposal-private-property-in-object": "7.21.11",
